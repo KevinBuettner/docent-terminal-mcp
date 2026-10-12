@@ -1,0 +1,29 @@
+[project]
+name = "docent-terminal-mcp"
+version = "0.1.0"
+description = "MCP server for shared, fully-logged interactive terminal sessions on tmux"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kevin Buettner", email = "kevinb@redhat.com" }]
+requires-python = ">=3.14"
+dependencies = [
+    "mcp>=2.2.0",
+]
+
+[project.scripts]
+docent-terminal-mcp = "docent_terminal_mcp.server:main"
+dtmcp = "docent_terminal_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,27 @@
+# systemd user unit for the shared docent-terminal-mcp server.
+#   cp contrib/docent-terminal-mcp.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now docent-terminal-mcp
+# It listens on the user's Unix socket, $XDG_RUNTIME_DIR/docent-terminal-mcp/server.sock
+# (clients: `docent-terminal-mcp connect`); add `--tcp` to ExecStart for a client
+# that can only be given a URL (then with the token, see README).  While
+# it runs it owns the state directory: stdio servers for the same state
+# refuse to start, so point clients at it instead.
+# The tmux server holding the sessions is started in a transient scope of
+# its own (docent-terminal-mcp-tmux-<socket>.scope), not in this unit's control
+# group, so stopping or restarting the service leaves the sessions running.
+[Unit]
+Description=docent-terminal-mcp shared server (interactive terminal sessions over MCP)
+
+[Service]
+# Per-host state and venv (%l is the short host name): a home on NFS is
+# shared by every host the user logs in on, and this enabled unit starts on
+# each of them.  With shared paths the second host's uv would rebuild the
+# checkout's .venv for its own Python, and its server would find the
+# state directory locked by the first.
+Environment=DOCENT_TERMINAL_MCP_HOME=%h/.local/state/docent-terminal-mcp-%l
+Environment=UV_PROJECT_ENVIRONMENT=%h/.local/share/docent-terminal-mcp-venv-%l
+ExecStart=%h/.local/bin/uv run --project %h/docent-terminal-mcp docent-terminal-mcp serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
