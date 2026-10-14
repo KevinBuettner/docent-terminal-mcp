@@ -21,10 +21,11 @@ well, either one may act as docent to the other, as the situation calls
 for.
 
 The command is `docent-terminal-mcp`, or `dtmcp` for short.  The examples
-register the server under the name `terminal`: a client shows its tools
-under that name (`mcp__terminal__run` in Claude Code, `terminal_run` in
-Open WebUI with the ID `terminal`), and the tools' own names are short and
-unprefixed (`session_create`, `run`, `read`, ...).
+register the server under the name `terminal` (for Hermes Agent,
+`dtmcp`; see below): a client shows its tools under that name
+(`mcp__terminal__run` in Claude Code, `terminal_run` in Open WebUI with
+the ID `terminal`), and the tools' own names are short and unprefixed
+(`session_create`, `run`, `read`, ...).
 
 ## Use
 
@@ -61,10 +62,16 @@ Hermes Agent, in `~/.hermes/config.yaml`:
 
 ```yaml
 mcp_servers:
-  terminal:
+  dtmcp:
     command: uv
     args: [run, --project, /path/to/docent-terminal-mcp, docent-terminal-mcp]
 ```
+
+Here the name is `dtmcp`, not `terminal`.  Hermes has a built-in toolset
+called `terminal`, and an MCP server of the same name is merged into it:
+enabling or disabling `terminal` would then switch Hermes's own terminal
+and this server together.  As `dtmcp`, the tools are `mcp__dtmcp__run`,
+... in a toolset of their own.
 
 Open WebUI cannot start a command.  It reaches a shared server over HTTP
 (`docent-terminal-mcp serve --tcp`, below).
