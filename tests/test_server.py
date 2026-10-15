@@ -702,6 +702,30 @@ async def test_expect_stop_rule_and_secret(term):
     assert "sent line (secret)" in out and "4321" not in out and "len=4" in out
 
 
+@needs("ssh localhost")
+async def test_a_timeout_in_an_inner_shell_counts_from_its_own_input(term):
+    # A line typed into a shell on another host (ssh, then su there): the
+    # time so far is that line's, not the ssh's.
+    await term("run", session="s", input="ssh -t localhost bash --norc --noprofile -i")
+    await term("run", session="s", input="sleep 4")
+    out = await term("run", session="s", input="sleep 10; echo x", timeout_s=2)
+    m = re.search(r"still running \((\d+) s so far", out)
+    assert m and int(m.group(1)) <= 3, out
+    await term("send", session="s", keys=["ctrl+c"])
+    await term("run", session="s", input="exit")
+
+
+def test_command_place_looks_at_each_part_of_a_list():
+    from docent_terminal_mcp.session import command_place
+    place = command_place("uname -r; su - dtest", "h", "root")  # (missed: the session stayed "root@h")
+    assert (place.host, place.user, place.via) == ("h", "dtest", "su")
+    assert command_place("cd /x && sudo -i", "h", "u").user == "root"
+    assert command_place("true || ssh b", "h", "u").host == "b"
+    assert command_place("echo 'a;b'; su", "h", "u").user == "root"
+    for line in ("ssh b uptime", "echo pw | su - x", "su -c id", "ls; ls", "echo 'su - x'"):
+        assert command_place(line, "h", "u") is None, line
+
+
 async def test_expect_repeating_rule_and_program_prompt(term):
     out = await term("expect", session="s", input=f"{sys.executable} -q", respond=[])
     assert out.startswith("[expect: the program is at its prompt")

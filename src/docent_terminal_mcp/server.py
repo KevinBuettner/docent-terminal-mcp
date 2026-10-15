@@ -2553,7 +2553,8 @@ def elapsed_tag(s: Session, region: Region | None = None) -> str:
     wedged job looked like a slow one, and a `wait` reply without it left
     "still going" and "stuck" a guess."""
     running = region if region is not None else s.open_command
-    if running is None or not running.started or running.done:
+    # (An input region ends at its timeout, while what it started runs on.)
+    if running is None or not running.started or (running.done and running.status != "timeout"):
         return ""
     quiet = time.monotonic() - s.last_output
     return (f"({human_age(time.time() - running.started)} so far"
@@ -3205,7 +3206,9 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             elif region.status == "waiting" and (yn := question_hint(s.term.cursor_text())):
                 out += "\n" + yn
             elif region.status in STATUS_HINTS:
-                out += "\n" + await status_hint(s, region.status)
+                # (This input's time, not the command it went to: a pytest run
+                # typed into a shell under `su` was "62 min so far", su's age.)
+                out += "\n" + await status_hint(s, region.status, region)
                 if region.status == "waiting" and (at := s.term.cursor_text()).strip():
                     # Digits become \d+: counters, times and dates in a prompt
                     # change every time ("In [7]:", "[18:02:11 #7] ready: ").

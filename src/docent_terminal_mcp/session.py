@@ -80,11 +80,31 @@ async def place_of_processes(tty: str, shell_pid: int,
 
 def command_place(command: str, host: str, user: str | None) -> Place | None:
     """Where a shell command typed on `host` (as `user`) goes on to: `ssh
-    B`, `ssh -J j B`, `sudo -i`, `sudo -u U -s`, `su -`, `su - U`."""
+    B`, `ssh -J j B`, `sudo -i`, `sudo -u U -s`, `su -`, `su - U` -- also
+    as a later part of a list (`uname -r; su - dtest`, `cd /x && sudo -i`):
+    the first part that goes somewhere is where the next line runs while
+    it does.  Not a pipeline's: its input is not the terminal."""
+    lexer = shlex.shlex(command.split("\n", 1)[0], posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
     try:
-        argv = shlex.split(command.split("\n", 1)[0])
+        tokens = list(lexer)
     except ValueError:
         return None
+    parts: list[list[str]] = [[]]
+    for token in tokens:
+        if token in (";", "&&", "||", "&"):
+            parts.append([])
+        else:
+            parts[-1].append(token)
+    for argv in parts:
+        if "|" in argv or "|&" in argv:
+            continue
+        if (place := _argv_place(argv, host)) is not None:
+            return place
+    return None
+
+
+def _argv_place(argv: list[str], host: str) -> Place | None:
     while argv and "=" in argv[0] and not argv[0].startswith("-"):
         argv = argv[1:]  # VAR=value prefixes
     if not argv:
