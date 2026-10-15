@@ -61,7 +61,7 @@ EXPECT_OUTCOMES = {
     "done": "the shell command finished",
     "ready": "the program is at its prompt",
     "until": "`until` matched",
-    "finished": "the input was taken and the shell command finished",
+    "finished": "the input was taken, and the program it went to exited",
     "stopped": "a stop rule matched; over to you",
     "unanswered": "output stopped at a question no rule answers; answer it with the `run` tool (the answer as input), or the `expect` tool again with a rule for it",
     "fullscreen": "a full-screen program took over; drive it with the `send` tool",
@@ -1808,6 +1808,11 @@ PAGER_HINTS = (
      "ends this listing.  `set pagination off` at gdb's prompt turns it off]"),
     (re.compile(r"--More--(\(\d+%\))?\s*$"),
      "[a pager (more), not a question: `send` keys=[\" \"] shows the next page, `send` keys=[\"q\"] ends it]"),
+    # less kept off the alternate screen (-X: systemctl's, git's LESS=FRX)
+    # is no full-screen program; its prompt with -M, or at the end.
+    (re.compile(r"(^lines \d+-\d+(/\d+)?( \d+%)?( \(END\))?|\(END\))\s*$"),
+     "[a pager (less), not a question: `send` keys=[\" \"] shows the next page, `send` keys=[\"q\"] ends it.  "
+     "--no-pager (systemctl, journalctl, git) or PAGER=cat before the command keeps it from stopping]"),
 )
 
 

@@ -726,6 +726,16 @@ def test_command_place_looks_at_each_part_of_a_list():
         assert command_place(line, "h", "u") is None, line
 
 
+@needs("less")
+async def test_less_off_the_alternate_screen_is_named_a_pager(term):
+    # systemctl's pager: LESS=FRSXMK keeps less on the normal screen, and
+    # "lines 1-3/3 (END)" was offered a prompt_pattern, as a question.
+    out = await term("run", session="s", input="seq 3 | LESS=RSXMK less", timeout_s=10)
+    assert "a pager (less), not a question" in out and "prompt_pattern" not in out, out
+    out = await term("send", session="s", keys=["q"])
+    assert "exit 0" in out, out
+
+
 async def test_expect_repeating_rule_and_program_prompt(term):
     out = await term("expect", session="s", input=f"{sys.executable} -q", respond=[])
     assert out.startswith("[expect: the program is at its prompt")
@@ -735,7 +745,10 @@ async def test_expect_repeating_rule_and_program_prompt(term):
     assert out.startswith("[expect: the program is at its prompt · 3 responses]")
     assert out.splitlines()[-1] == "15"
     assert "· ready ·" in out
-    await term("run", session="s", input="exit()")
+    # Input that ends the program: said of the program, not "the shell command".
+    out = await term("expect", session="s", input="exit()", respond=[])
+    assert out.startswith("[expect: the input was taken, and the program it went to exited"), out
+    assert "exit 0" in out, out
 
 
 async def test_expect_until(term):
