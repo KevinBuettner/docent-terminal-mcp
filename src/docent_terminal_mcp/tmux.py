@@ -551,8 +551,10 @@ class Tmux:
 
 # Where a sleeping process waits, as ps reports it (wchan).
 TTY_READ_WAITS = ("wait_woken", "n_tty_read")  # blocked reading the terminal
-POLL_WAITS = ("poll_schedule_timeout", "do_sys_poll", "do_select", "core_sys_select",
-              "ep_poll", "do_epoll_wait")  # an input loop (readline, gdb, python)
+# An input loop (readline, gdb, python).  Kernels name poll()'s wait differently:
+# do_poll.constprop.0 on Linux 5.15 (Ubuntu 22.04), poll_schedule_timeout on 7.1.
+POLL_WAITS = ("poll_schedule_timeout", "do_sys_poll", "do_poll", "do_select", "core_sys_select",
+              "ep_poll", "do_epoll_wait")
 # Waiting on another process: a shell for its child, a pipeline's reader
 # or writer for the other end (`gdb ... | tail`: tail decides nothing).
 NEUTRAL_WAITS = ("do_wait", "anon_pipe_read", "anon_pipe_write", "pipe_read", "pipe_write", "pipe_wait")
