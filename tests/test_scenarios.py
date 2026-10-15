@@ -192,6 +192,16 @@ SCENARIOS = [
                 "lacks": ["· ready ·"]},
                {"call": "wait", "args": {"timeout_s": 20}, "has": ["done-42", "· ready ·"]},
                {"call": "send", "args": {"text": "exit", "keys": ["enter"]}}]},
+    {"name": "R-dots-progress-line-over-ssh-is-not-a-prompt", "needs": ["ssh localhost"], "source": "Ubuntu install test",
+     "session": {"cwd": "{home}"},
+     "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
+               # pytest -q's progress line: its leading dots are no Python
+               # "..." prompt with output after it ("ready"), nor one a
+               # human typed at.
+               {"call": "run", "args": {"input": "printf '....F... [ 17%%]\\n'; sleep 5; echo done-$((6*7))",
+                                        "timeout_s": 3}, "lacks": ["· ready ·"]},
+               {"call": "wait", "args": {"timeout_s": 20}, "has": ["done-42"], "lacks": ["typed at the prompt"]},
+               {"call": "send", "args": {"text": "exit", "keys": ["enter"]}}]},
     {"name": "R-F7b-ssh-integrated-fake-prompt-wait-gets-exit", "needs": ["ssh localhost"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "shell_integrate", "args": {}},

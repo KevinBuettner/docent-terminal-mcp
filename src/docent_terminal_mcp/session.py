@@ -187,10 +187,12 @@ ZSH_PS2 = ("for|while|until|if|then|else|elif|do|foreach|quote|dquote|bquote|cmd
 # The terminal's echo of a ctrl+c ("^C") can sit before a prompt printed
 # without a line break: Python's REPL back at ">>> " after a command that
 # handled the interrupt itself.  IPython's prompts ("In [3]: ", "   ...: ")
-# are Python's kind.  gdb indents its continuation prompt by block depth
-# (" >" inside a while, "  >" nested).
+# are Python's kind, followed by a space or the line's end: pytest's
+# progress line ("....F.. [ 35%]") starts with no "..." prompt.  gdb
+# indents its continuation prompt by block depth (" >" inside a while,
+# "  >" nested).
 DEFAULT_PROMPT_PATTERN = (
-    r"((?P<py>^(?:\^C)*(>>>|\.\.\.|In \[\d+\]:| +\.\.\.:)\s*)|(?P<cont>^(?:\^C)* *(?:(?:" + ZSH_PS2 + r") )*(?:" + ZSH_PS2 + r")?> ?)"
+    r"((?P<py>^(?:\^C)*(>>>|\.\.\.|In \[\d+\]:| +\.\.\.:)(?=\s|$)\s*)|(?P<cont>^(?:\^C)* *(?:(?:" + ZSH_PS2 + r") )*(?:" + ZSH_PS2 + r")?> ?)"
     r"|(?P<dbg>(\((gdb|top-gdb|Pdb|lldb)\)|irb\([^)]*\):\d+[>*]|C-Kermit>)\s*)|(?P<sh>^.*?[$#%>] +))$"
 )
 DEFAULT_PROMPT_RE = re.compile(DEFAULT_PROMPT_PATTERN)
