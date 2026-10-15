@@ -49,8 +49,11 @@ sessions, run one server for all of them instead: see below.)
 Claude Code:
 
 ```sh
-claude mcp add terminal -- uv run --project "$PWD" docent-terminal-mcp
+claude mcp add -s user terminal -- uv run --project "$PWD" docent-terminal-mcp
 ```
+
+(`-s user` makes it available in every directory; without it, Claude Code
+registers it for the current one only, here the clone.)
 
 Codex:
 
@@ -84,7 +87,7 @@ share sessions (and each other's work), run one shared server instead:
 
 ```sh
 uv run docent-terminal-mcp serve            # or install contrib/docent-terminal-mcp.service (systemd --user)
-claude mcp add terminal -- uv run --project /path/to/docent-terminal-mcp \
+claude mcp add -s user terminal -- uv run --project /path/to/docent-terminal-mcp \
     docent-terminal-mcp connect --actor claude-code
 ```
 
@@ -116,7 +119,7 @@ type MCP.  Requests need the bearer token from
 can reach it; the token file is not.
 
 ```sh
-claude mcp add --transport http terminal http://127.0.0.1:8766/mcp \
+claude mcp add -s user --transport http terminal http://127.0.0.1:8766/mcp \
     --header "Authorization: Bearer $(uv run --project /path/to/docent-terminal-mcp docent-terminal-mcp token)" \
     --header "X-Terminal-Actor: claude-code"
 ```
