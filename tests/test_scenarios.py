@@ -3,8 +3,10 @@
 A scenario is a session to create and a list of steps.  Each step is one
 tool call with the text its reply must contain ("has"), must not contain
 ("lacks"), whether it must fail ("error"), and how long it may take
-("max_s").  "{home}" in any string is the test's directory.  Sessions get a
-HOME whose login profile sets PS1='$ ', like the other end-to-end tests.
+("max_s").  "needs" lists what it needs beyond tmux and bash (needs.py);
+without it the scenario is skipped.  "{home}" in any string is the test's
+directory.  Sessions get a HOME whose login profile sets PS1='$ ', like the
+other end-to-end tests.
 
 Findings from sub-agent rounds and test rounds go here when a few calls
 reproduce them; anything needing more logic (two agents, a human typing)
@@ -19,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from needs import needs
 from test_server import Term, plain_home
 
 pytestmark = pytest.mark.skipif(shutil.which("tmux") is None, reason="needs tmux")
@@ -48,7 +51,7 @@ SCENARIOS = [
         ],
     },
     {
-        "name": "gdb-ex-without-batch-pending-breakpoint-via-expect",
+        "name": "gdb-ex-without-batch-pending-breakpoint-via-expect", "needs": ["gdb", "cc"],
         "source": "guide advice: checks the documented call works",
         "session": {"cwd": "{home}"},
         "steps": [
@@ -88,7 +91,7 @@ SCENARIOS = [
      "steps": [{"call": "run", "args": {"input": "printf '\\e]133;D;42;pid=%s\\a' $$; sleep 1; echo real-output; false",
                                         "timeout_s": 10},
                 "has": ["real-output", "exit 1"], "lacks": ["exit 42"]}]},
-    {"name": "F5-gdb-inferior-printing-fake-prompt",
+    {"name": "F5-gdb-inferior-printing-fake-prompt", "needs": ["gdb", "python3", "/proc syscall"],
      "session": {"command": "gdb -q -nx -iex 'set debuginfod enabled off' --args python3 -c \"import time,sys; sys.stdout.write('(gdb) '); sys.stdout.flush(); time.sleep(3); print('really-done')\""},
      "steps": [{"call": "run", "args": {"input": "run", "timeout_s": 20}, "has": ["really-done", "exited normally"]}]},
     {"name": "F6-session-env-does-not-leak-server-venv",
@@ -97,7 +100,7 @@ SCENARIOS = [
     {"name": "F10-tab-in-run-input-is-literal", "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "touch fake fake.c; echo fak\tx; printf '[%s]\\n' \"a\tb\""},
                 "lacks": ["fakex", "[ab]"]}]},
-    {"name": "F4-python-one-line-compound-statement-runs", "session": {"command": "python3 -q"},
+    {"name": "F4-python-one-line-compound-statement-runs", "needs": ["python3"], "session": {"command": "python3 -q"},
      "steps": [{"call": "run", "args": {"input": "for x in range(3): print(x)", "timeout_s": 10}, "has": ["0\n1\n2"]},
                {"call": "run", "args": {"input": "print('next')"}, "has": ["next", "· ready ·"]}]},
     {"name": "F12-typeahead-line-that-runs-is-reported", "session": {},
@@ -123,7 +126,7 @@ SCENARIOS = [
      "steps": [{"call": "run", "args": {"input": "printf 'tail-no-nl'"}},
                {"call": "run", "args": {"input": "echo second"}},
                {"call": "read", "args": {"region": 1}, "has": ["tail-no-nl"], "lacks": ["echo second"]}]},
-    {"name": "F11-wide-char-at-wrap-edge-no-space", "session": {},
+    {"name": "F11-wide-char-at-wrap-edge-no-space", "needs": ["python3"], "session": {},
      "steps": [{"call": "run", "args": {"input": "python3 -c \"print('a' + '日'*100 + 'END')\""},
                 "has": ["a" + "日" * 100 + "END"]}]},
     {"name": "F1-single-huge-line-is-clipped", "session": {},
@@ -132,7 +135,7 @@ SCENARIOS = [
     {"name": "F7-noncanonical-reader-without-prompt-is-waiting", "session": {},
      "steps": [{"call": "run", "args": {"input": "read -e x", "timeout_s": 30}, "max_s": 8, "has": ["waiting for input"]},
                {"call": "send", "args": {"keys": ["ctrl+d"]}}]},
-    {"name": "F17-exec-into-repl-returns-at-prompt", "session": {},
+    {"name": "F17-exec-into-repl-returns-at-prompt", "needs": ["python3"], "session": {},
      "steps": [{"call": "run", "args": {"input": "exec python3 -q", "timeout_s": 20}, "max_s": 8, "has": ["waiting for input at '>>>'"],
                 "lacks": ["still running; use `wait`"]}]},
     {"name": "F9-comment-or-blank-line-returns-quickly", "session": {},
@@ -153,35 +156,35 @@ SCENARIOS = [
                                         "until": "^step2$", "timeout_s": 30},
                 "max_s": 5, "has": ["step2", "`until` matched"], "lacks": ["step5"]},
                {"call": "wait", "args": {"timeout_s": 20}, "has": ["step6", "exit 0"]}]},
-    {"name": "run-until-inside-a-program", "session": {"command": "python3 -q"},
+    {"name": "run-until-inside-a-program", "needs": ["python3"], "session": {"command": "python3 -q"},
      "steps": [{"call": "run", "args": {"input": "import time; [print('n', i, flush=True) or time.sleep(1) for i in range(6)]",
                                         "until": "^n 1$", "timeout_s": 30},
                 "max_s": 5, "has": ["n 1", "· until ·", "`until` matched"], "lacks": ["n 4"]},
                {"call": "wait", "args": {"timeout_s": 20}, "has": ["n 5", "· ready ·"]}]},
     # -- smaller-model round: gdb's inferior at its own prompt --
-    {"name": "inferior-prompt-under-gdb-started-from-bash", "session": {},
+    {"name": "inferior-prompt-under-gdb-started-from-bash", "needs": ["gdb", "python3"], "session": {},
      "steps": [{"call": "run", "args": {"input": "gdb -q -nx -iex 'set debuginfod enabled off' --args python3 -c \"x = input('stock> '); print('got', x)\""},
                 "has": ["waiting for input at '(gdb)'"]},
                {"call": "run", "args": {"input": "run", "timeout_s": 20}, "max_s": 2.5, "has": ["· ready ·"]},
                {"call": "run", "args": {"input": "apple", "timeout_s": 20}, "has": ["got apple", "exited normally"]},
                {"call": "run", "args": {"input": "print 1+1"}, "max_s": 2.5, "has": ["$1 = 2", "· ready ·"]}]},
     # -- smaller-model round --
-    {"name": "a-programs-prompt-is-not-called-a-question", "session": {},
+    {"name": "a-programs-prompt-is-not-called-a-question", "needs": ["python3"], "session": {},
      "steps": [{"call": "run", "args": {"input": "python3 -c \"import sys\nwhile True:\n  x = input('stock> ')\n  print('got', x)\n  x == 'quit' and sys.exit()\""},
                 "has": ["waiting for input at 'stock>'"]},
                {"call": "run", "args": {"input": "quit", "prompt_pattern": r"\$ $"},
                 "lacks": ["as the answer"]}]},
-    {"name": "a-prompt-the-callers-pattern-misses-is-named", "session": {"command": "gdb -q -nx -iex 'set debuginfod enabled off'"},
+    {"name": "a-prompt-the-callers-pattern-misses-is-named", "needs": ["gdb"], "session": {"command": "gdb -q -nx -iex 'set debuginfod enabled off'"},
      "steps": [{"call": "run", "args": {"input": "print 1", "prompt_pattern": r"\$ $"},
                 "has": ["· waiting ·", "looks like a prompt your prompt_pattern does not match"]}]},
-    {"name": "gdb-prompt-under-a-shell-pattern-is-not-a-question", "source": "evaluation smoke test",
+    {"name": "gdb-prompt-under-a-shell-pattern-is-not-a-question", "needs": ["gdb"], "source": "evaluation smoke test",
      "session": {},
      "steps": [{"call": "run", "args": {"input": "gdb -q -nx -iex 'set debuginfod enabled off'"}},
                {"call": "run", "args": {"input": "print 1+1", "prompt_pattern": r"\$ $"},
                 "has": ["$1 = 2", "looks like a prompt your prompt_pattern does not match"],
                 "lacks": ["as the answer"]}]},
     # -- sub-agent remote-shell hunt (R + its F numbers) --
-    {"name": "R-F2-ssh-fake-prompt-mid-command-not-ready", "session": {"cwd": "{home}"},
+    {"name": "R-F2-ssh-fake-prompt-mid-command-not-ready", "needs": ["ssh localhost"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}, "has": ["$"]},
                # Over ssh the sleep is invisible: "build> " is not taken for the
                # prompt ("ready"); the call waits, and `wait` gets the real one.
@@ -189,7 +192,7 @@ SCENARIOS = [
                 "lacks": ["· ready ·"]},
                {"call": "wait", "args": {"timeout_s": 20}, "has": ["done-42", "· ready ·"]},
                {"call": "send", "args": {"text": "exit", "keys": ["enter"]}}]},
-    {"name": "R-F7b-ssh-integrated-fake-prompt-wait-gets-exit", "session": {"cwd": "{home}"},
+    {"name": "R-F7b-ssh-integrated-fake-prompt-wait-gets-exit", "needs": ["ssh localhost"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "shell_integrate", "args": {}},
                {"call": "run", "args": {"input": "printf 'user@host:~$ '; sleep 3; echo after"}},
@@ -199,13 +202,13 @@ SCENARIOS = [
     {"name": "R-F10-plain-shell-wait-after-silent-timeout", "session": {"command": "bash --norc --noprofile -i", "cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "sleep 4", "timeout_s": 2}, "has": ["timeout"]},
                {"call": "wait", "args": {"timeout_s": 10}, "has": ["ready"], "lacks": ["still running"], "max_s": 5}]},
-    {"name": "R-F14-ssh-signal-does-not-kill-connection", "session": {"cwd": "{home}"},
+    {"name": "R-F14-ssh-signal-does-not-kill-connection", "needs": ["ssh localhost"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "run", "args": {"input": "sleep 30", "timeout_s": 1}},
                {"call": "send", "args": {"signal": "INT"}, "error": True, "has": ["ssh"]},
                {"call": "send", "args": {"keys": ["ctrl+c"]}},
                {"call": "run", "args": {"input": "exit"}}]},
-    {"name": "R-F4-ssh-ctrl-c-note-no-term-advice", "session": {"cwd": "{home}"},
+    {"name": "R-F4-ssh-ctrl-c-note-no-term-advice", "needs": ["ssh localhost", "python3"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "run", "args": {"input": "python3 -q"}},
                {"call": "run", "args": {"input": "import time; time.sleep(30)", "timeout_s": 2}},
@@ -215,14 +218,14 @@ SCENARIOS = [
                {"call": "run", "args": {"input": "sleep 30", "timeout_s": 2}, "lacks": ["ctrl+c did not stop", "TERM"]},
                {"call": "send", "args": {"keys": ["ctrl+c"]}},
                {"call": "run", "args": {"input": "exit"}}]},
-    {"name": "R-F13-shell-integrate-refuses-non-shell-foreground", "session": {"command": "bash --norc --noprofile -i", "cwd": "{home}"},
+    {"name": "R-F13-shell-integrate-refuses-non-shell-foreground", "needs": ["python3"], "session": {"command": "bash --norc --noprofile -i", "cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "python3 -q"}},
                {"call": "shell_integrate", "args": {}, "error": True, "has": ["python"], "max_s": 3},
                {"call": "send", "args": {"keys": ["ctrl+d"]}},
                {"call": "run", "args": {"input": "read -s -p 'Password: ' p; echo; echo len=${#p}"}},
                {"call": "shell_integrate", "args": {}, "error": True, "max_s": 3},
                {"call": "send", "args": {"keys": ["ctrl+c"]}}]},
-    {"name": "R-F3-ssh-python-prompt-recognised", "session": {"cwd": "{home}"},
+    {"name": "R-F3-ssh-python-prompt-recognised", "needs": ["ssh localhost", "python3"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "run", "args": {"input": "python3 -q"}, "lacks": ["question"], "max_s": 2},
                {"call": "run", "args": {"input": "print(6*7)"}, "has": ["42"], "lacks": ["question"], "max_s": 2},
@@ -244,7 +247,7 @@ SCENARIOS = [
     {"name": "R-F11-question-after-partial-output-not-unsubmitted", "session": {"command": "bash --norc --noprofile -i", "cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "printf 'build> '; read -p 'Name: ' n; echo n=$n"}},
                {"call": "run", "args": {"input": "bob"}, "has": ["n=bob"], "lacks": ["discarded", "unsubmitted"]}]},
-    {"name": "R-F15-ssh-wait-nothing-running-returns", "session": {"cwd": "{home}"},
+    {"name": "R-F15-ssh-wait-nothing-running-returns", "needs": ["ssh localhost"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "ssh localhost"}},
                {"call": "run", "args": {"input": "echo x"}, "has": ["x"]},
                {"call": "wait", "args": {"timeout_s": 6}, "has": ["the shell at the far end of this ssh is at its prompt"],
@@ -255,7 +258,7 @@ SCENARIOS = [
      "steps": [{"call": "run", "args": {"input": "printf 'one\\ntwo\\nthree\\n'; read -s -n1; printf '\\033[3AONE\\033[K\\nTWO\\033[K\\nTHREE\\033[K\\n'; read -s -n1", "timeout_s": 10}, "has": ["three"]},
                {"call": "send", "args": {"keys": ["x"]}, "has": ["ONE", "TWO", "THREE"], "lacks": ["no new output"]},
                {"call": "send", "args": {"keys": ["x"]}, "has": ["exit 0"]}]},
-    {"name": "T-B-send-text-newline-is-enter", "session": {"cwd": "{home}", "cols": 120, "rows": 40},
+    {"name": "T-B-send-text-newline-is-enter", "needs": ["nano"], "session": {"cwd": "{home}", "cols": 120, "rows": 40},
      "steps": [{"call": "run", "args": {"input": "nano {home}/n.txt"}, "has": ["GNU nano"]},
                {"call": "send", "args": {"text": "first line\nsecond line\nthird line", "screen": "full"},
                 "has": ["second line"], "lacks": ["Justified", "first line second line"]},
@@ -274,47 +277,47 @@ SCENARIOS = [
                {"call": "read", "args": {"limit": 6}, "has": ["2\t[full-screen program output omitted]"],
                 "lacks": ["3\t[full-screen program output omitted]"]}]},
     # -- sub-agent programs hunt (P + its F numbers) --
-    {"name": "P-F1-statusline-is-not-fullscreen", "session": {"cwd": "{home}"},
+    {"name": "P-F1-statusline-is-not-fullscreen", "needs": ["python3"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "python3 -c \"import sys; w=sys.stdout.write; w('\\x1b[1;20r\\x1b7\\x1b[24;1Hstatus: ok\\x1b8'); w('prompt> '); sys.stdout.flush(); s=input(); w('\\x1b7\\x1b[24;1Hstatus: busy\\x1b8'); print('got', s); w('prompt> '); sys.stdout.flush(); input()\"", "timeout_s": 10},
                 "lacks": ["full-screen"]},
                {"call": "run", "args": {"input": "hello"}, "has": ["got hello"], "lacks": ["full-screen", "status: busy"]},
                {"call": "send", "args": {"keys": ["ctrl+d"]}}]},
-    {"name": "P-F2-fish-prompt-survives-cd", "session": {"command": "fish -N", "cwd": "{home}"},
+    {"name": "P-F2-fish-prompt-survives-cd", "needs": ["fish"], "session": {"command": "fish -N", "cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "echo one"}, "has": ["one"]},
                {"call": "run", "args": {"input": "cd /tmp"}, "has": ["ready"], "lacks": ["waiting", "not this shell's"], "max_s": 2.5},
                {"call": "run", "args": {"input": "echo two"}, "has": ["two", "ready"], "lacks": ["waiting"], "max_s": 2.5}]},
-    {"name": "P-F3-node-continuation-prompt", "session": {"command": "node"},
+    {"name": "P-F3-node-continuation-prompt", "needs": ["node"], "session": {"command": "node"},
      "steps": [{"call": "run", "args": {"input": "function f() {\nreturn 7 }\nf()"}, "has": ["7"], "lacks": ["not sent", "waiting"], "max_s": 4}]},
-    {"name": "P-F3-sqlite-continuation-prompt", "session": {"command": "sqlite3 :memory:"},
+    {"name": "P-F3-sqlite-continuation-prompt", "needs": ["sqlite3"], "session": {"command": "sqlite3 :memory:"},
      "steps": [{"call": "run", "args": {"input": "select 6*7\n;"}, "has": ["42"], "lacks": ["not sent", "not this shell's"], "max_s": 3}]},
-    {"name": "P-F3-guile-error-prompt", "session": {"command": "guile -q"},
+    {"name": "P-F3-guile-error-prompt", "needs": ["guile"], "session": {"command": "guile -q"},
      "steps": [{"call": "run", "args": {"input": "(car '())\n,q\n(+ 1 2)"}, "has": ["$1 = 3"], "lacks": ["not sent", "waiting"], "max_s": 5}]},
-    {"name": "P-F3-zsh-ps2-prompt", "session": {"command": "zsh -f"},
+    {"name": "P-F3-zsh-ps2-prompt", "needs": ["zsh"], "session": {"command": "zsh -f"},
      "steps": [{"call": "run", "args": {"input": "for i in 1 2\ndo echo n$i\ndone"}, "has": ["n1", "n2"], "lacks": ["not sent"], "max_s": 4}]},
-    {"name": "P-F8-program-output-after-a-prompt-is-not-discarded", "session": {"cwd": "{home}"},
+    {"name": "P-F8-program-output-after-a-prompt-is-not-discarded", "needs": ["python3"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "python3 -c \"import sys,tty; print('>>> step 1', end='', flush=True); tty.setraw(0); s = sys.stdin.read(3); tty.setcbreak(0); print(); print('got', repr(s))\"", "timeout_s": 10}, "has": ["step 1"]},
                {"call": "run", "args": {"input": "abc", "timeout_s": 10}, "has": ["got 'abc'"], "lacks": ["discarded", "\\x05"]}]},
-    {"name": "P-F4-popup-screen-returned", "session": {"command": "python3 -c \"import sys; w=sys.stdout.write; w('\\x1b[2J\\x1b[Hline one\\r\\n'); sys.stdout.flush(); input(); w('\\x1b[?25l\\x1b[5;10H+--------+\\x1b[6;10H| POPUP  |\\x1b[7;10H+--------+\\x1b[6;16H\\x1b[?25h'); sys.stdout.flush(); input()\""},
+    {"name": "P-F4-popup-screen-returned", "needs": ["python3"], "session": {"command": "python3 -c \"import sys; w=sys.stdout.write; w('\\x1b[2J\\x1b[Hline one\\r\\n'); sys.stdout.flush(); input(); w('\\x1b[?25l\\x1b[5;10H+--------+\\x1b[6;10H| POPUP  |\\x1b[7;10H+--------+\\x1b[6;16H\\x1b[?25h'); sys.stdout.flush(); input()\""},
      "steps": [{"call": "send", "args": {"keys": ["enter"], "wait_ms": 1500}, "has": ["POPUP"], "lacks": ["no new output"]}]},
-    {"name": "P-F5-poll-idle-program-start-returns", "session": {"cwd": "{home}"},
+    {"name": "P-F5-poll-idle-program-start-returns", "needs": ["python3"], "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "python3 -c 'import select,sys; print(\"connected\"); select.select([sys.stdin],[],[]); print(\"got\", sys.stdin.readline())'", "timeout_s": 30},
                 "has": ["connected"], "lacks": ["still running; use `wait`"], "max_s": 8},
                {"call": "run", "args": {"input": "hi"}, "has": ["got hi"]}]},
-    {"name": "P-F7-kermit-prompt", "session": {"command": "kermit", "cwd": "{home}"},
+    {"name": "P-F7-kermit-prompt", "needs": ["kermit"], "session": {"command": "kermit", "cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "echo hi there"}, "has": ["hi there", "ready"], "lacks": ["waiting"], "max_s": 3}]},
-    {"name": "P-F6-node-await-timer", "session": {"command": "node"},
+    {"name": "P-F6-node-await-timer", "needs": ["node"], "session": {"command": "node"},
      "steps": [{"call": "run", "args": {"input": "await new Promise(r => setTimeout(() => r('late'), 5000))"}, "has": ["'late'"], "lacks": ["settled"]}]},
-    {"name": "P-python-independent-lines-each-shown", "session": {"command": "python3 -q"},
+    {"name": "P-python-independent-lines-each-shown", "needs": ["python3"], "session": {"command": "python3 -q"},
      "steps": [{"call": "run", "args": {"input": "[n*n for n in range(5)]\n6*7"}, "has": ["[0, 1, 4, 9, 16]", "42"]}]},
     # -- the evaluation's guidance round --
-    {"name": "live-gdb-with-redirected-output-is-named", "source": "eval guidance round: the one FAIL", "session": {"cwd": "{home}"},
+    {"name": "live-gdb-with-redirected-output-is-named", "needs": ["gdb"], "source": "eval guidance round: the one FAIL", "session": {"cwd": "{home}"},
      "steps": [{"call": "run", "args": {"input": "gdb -q -nx -iex 'set debuginfod enabled off' > {home}/trace.out 2>&1", "timeout_s": 3},
                 "has": ["gdb's output goes to {home}/trace.out", "ctrl+d"]},
                {"call": "send", "args": {"keys": ["ctrl+d"]}}]},
     {"name": "a-timeout-beyond-the-client-limit-is-cut", "source": "eval guidance round: wait timeout_s=60000", "session": {},
      "steps": [{"call": "run", "args": {"input": "echo quick", "timeout_s": 60000},
                 "has": ["timeout_s 60000 cut to 1500 s", "quick"]}]},
-    {"name": "an-unknown-prompt-gets-a-pattern-offered", "source": "prompt_pattern after observation",
+    {"name": "an-unknown-prompt-gets-a-pattern-offered", "needs": ["python3"], "source": "prompt_pattern after observation",
      "session": {"command": "python3 -c \"import sys\nwhile True:\n  s = input('Enter choice= ')\n  print('chose', s)\""},
      "steps": [{"call": "run", "args": {"input": "1"}, "has": ["chose 1", "· waiting ·", "pass prompt_pattern `Enter choice= $`"]},
                {"call": "run", "args": {"input": "2", "prompt_pattern": "Enter choice= $"}, "has": ["chose 2", "· ready ·"], "max_s": 2}]},
@@ -332,7 +335,7 @@ SCENARIOS = [
                 "has": ["four", "· ready ·"], "max_s": 4},
                {"call": "run", "args": {"input": "echo 'note: '; sleep 2; echo five", "prompt_pattern": ": $"},
                 "has": ["five"]}]},
-    {"name": "changing-prompt-counter",  # (IPython's own "In [n]: " is known by default)
+    {"name": "changing-prompt-counter", "needs": ["python3"],  # (IPython's own "In [n]: " is known by default)
      "session": {"command": "python3 -c \"n=1\nwhile True:\n  s=input(f'calc[{n}]: ')\n  print(f'Out[{n}]:', eval(s))\n  n+=1\""},
      "steps": [{"call": "run", "args": {"input": "6*7"}, "has": ["Out[1]: 42", "pass prompt_pattern `calc\\[\\d+\\]: $`"],
                 "lacks": ["as the answer"]},
@@ -378,7 +381,7 @@ def env(tmp_path):
     (Path(tmpdir) / f"tmux-{os.getuid()}" / socket).unlink(missing_ok=True)
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS, ids=[s["name"] for s in SCENARIOS])
+@pytest.mark.parametrize("scenario", [pytest.param(s, id=s["name"], marks=needs(*s.get("needs", ()))) for s in SCENARIOS])
 async def test_scenario(env, scenario):
     home = str(env[0])
     t = Term(*env)

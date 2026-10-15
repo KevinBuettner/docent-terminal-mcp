@@ -11,6 +11,8 @@ import sys
 import time
 
 import pytest
+
+from needs import needs
 from pathlib import Path
 from mcp import Client
 
@@ -179,6 +181,7 @@ def test_the_skill_is_written_from_the_guide(tmp_path):
     assert json.loads((plugin / ".claude-plugin/plugin.json").read_text())["name"] == "docent-terminal-mcp"
 
 
+@needs("gdb")
 async def test_shell_habits_are_remarked_on_once(term):
     """A one-shot habit in a session's shell command gets a note in the reply
     the first time: gdb -batch with -ex, | tail, capturing output in a file."""
@@ -207,6 +210,7 @@ async def test_shell_habits_are_remarked_on_once(term):
     assert "[note:" not in out  # all three already noted; a plain command never gets one
 
 
+@needs("gdb")
 async def test_gdb_fed_its_commands_on_stdin_is_one_shot_too(term):  # a model's `printf ... | gdb`
     out = await term("run", session="s", input="printf 'print 6*7\\n' | gdb -q -nx")
     assert "$1 = 42" in out and "-batch suits a single question; for a series about the same program" in out, out
@@ -301,6 +305,7 @@ async def test_human_input_is_respected_and_attributed(term):
     assert "started by" not in out.splitlines()[1]
 
 
+@needs("less")
 async def test_full_screen_program_returns_the_screen(term):
     out = await term("send", session="s", text="less /etc/passwd", keys=["enter"])
     assert out.startswith("[screen 160x48 · cursor row") and "full-screen program]" in out
@@ -315,6 +320,7 @@ async def test_bad_key_is_rejected(term):
         await term("send", session="s", keys=["ctrl-alt-banana"])
 
 
+@needs("vi")
 async def test_run_returns_when_a_full_screen_program_starts(term):
     (term.home / "f.txt").write_text("alpha\nbeta\n")
     out = await term("run", session="s", input="vi f.txt", timeout_s=20)
@@ -518,6 +524,7 @@ async def test_blank_rows_summarised_anywhere(term):
     assert "[rows 3-6 blank]" in out and "bottom" in out
 
 
+@needs("vi")
 async def test_screen_changes_mode(env):
     # "changes" compares with the screen held in memory, so this test keeps
     # one server for all its calls instead of one per call.
@@ -543,6 +550,7 @@ async def test_screen_changes_mode(env):
         await call("send", session="s", text=":q!", keys=["enter"])
 
 
+@needs("less")
 async def test_cursor_mode_on_a_pagers_bottom_line_shows_what_moved(env):
     # A pager's cursor sits on its command line, whose neighbours say nothing
     # of where the view went: the reply hands back the changed rows (one
@@ -890,6 +898,7 @@ async def test_scrolled_back_human_blocks_typing(term):
     assert out.splitlines()[-1] == "forced"
 
 
+@needs("gdb")
 async def test_gdb_continuation_prompt(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -924,7 +933,7 @@ async def test_editing_a_line_with_wide_characters(env):
     assert "日本X語テ" in out.splitlines()
 
 
-@pytest.mark.skipif(shutil.which("top") is None, reason="needs top")
+@needs("top")
 async def test_top_is_treated_as_full_screen(term):
     t0 = asyncio.get_running_loop().time()
     out = await term("run", session="s", input="top -d 1", timeout_s=20)
@@ -1118,6 +1127,7 @@ async def test_following_size_is_listed_as_such(env):
     assert " fixed" not in await t("session_list")
 
 
+@needs("vi")
 async def test_screen_replies_honour_max_lines(term):
     (term.home / "f.txt").write_text("one\ntwo\n")
     out = await term("run", session="s", input="vi f.txt", max_lines=5)
@@ -1189,6 +1199,7 @@ async def test_replay_reads_early_output_at_the_creation_width(env):
     assert out.splitlines()[1].endswith("\tnow-at-100")
 
 
+@needs("gdb")
 async def test_several_gdb_commands_in_one_run(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1209,7 +1220,7 @@ async def test_python_block_label_has_no_trailing_prompt(term):
     await term("run", session="s", input="exit()")
 
 
-@pytest.mark.skipif(shutil.which("top") is None, reason="needs top")
+@needs("top")
 async def test_run_top_with_a_slow_refresh(term):
     out = await term("run", session="s", input="top -d 5", timeout_s=20)
     assert "full-screen program; drive it with the `send` tool" in out and "[screen " in out
@@ -1253,6 +1264,7 @@ async def test_exit_status_not_seen_is_said(term):
     assert "exit status not seen" in (await term("regions", session="s")).splitlines()[0]
 
 
+@needs("less")
 async def test_screen_budget_counts_summaries_once(term):
     out = await term("run", session="s", input="printf 'a\\nb\\nc\\n' | less", max_lines=20)
     screen = out[out.index("[screen "):].splitlines()
@@ -1348,6 +1360,7 @@ async def test_show_filters_the_reply_not_the_command(term):
     assert "line137" in session_txt  # nothing was filtered from the log
 
 
+@needs("gdb")
 async def test_expect_multi_line_label(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1357,6 +1370,7 @@ async def test_expect_multi_line_label(env):
     assert out.splitlines()[-1] == "$2 = 2"
 
 
+@needs("gdb")
 async def test_expect_sees_the_prompt_of_a_session_program(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1393,6 +1407,7 @@ def _detach_humans():
         HUMANS.pop().kill()
 
 
+@needs("gdb")
 async def test_human_line_at_a_program_prompt_is_protected(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1407,6 +1422,7 @@ async def test_human_line_at_a_program_prompt_is_protected(env):
     assert out.splitlines()[-1] == "$1 = 222"
 
 
+@needs("gdb")
 async def test_human_line_in_gdb_under_bash_is_protected(term):
     await term("run", session="s", input="gdb -q -nx")
     type_as_human(term.socket, "s", "print 444")
@@ -1416,6 +1432,7 @@ async def test_human_line_in_gdb_under_bash_is_protected(term):
     await term("run", session="s", input="quit", force=True)
 
 
+@needs("gdb")
 async def test_own_half_typed_text_at_a_program_prompt(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1428,6 +1445,7 @@ async def test_own_half_typed_text_at_a_program_prompt(env):
     assert out.splitlines()[-1] == "$2 = 7"
 
 
+@needs("vi")
 async def test_custom_prompt_session_details(env):
     home = env[0]
     (home / "f.txt").write_text("x\n")
@@ -1468,6 +1486,7 @@ async def test_progress_line_is_not_a_prompt_once_the_prompt_is_known(term):
     await term("run", session="s", input="exit()")
 
 
+@needs("gdb")
 async def test_gdb_progress_line_is_not_a_prompt(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1476,6 +1495,7 @@ async def test_gdb_progress_line_is_not_a_prompt(env):
     assert "· ready ·" in out and out.splitlines()[-1] == "done-g"
 
 
+@needs("gdb")
 async def test_wait_resumes_a_timed_out_program_input(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1485,6 +1505,7 @@ async def test_wait_resumes_a_timed_out_program_input(env):
     assert "· ready ·" in out and out.splitlines()[-1] == "late-g"
 
 
+@needs("gdb")
 async def test_expect_until_does_not_outlast_the_prompt(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -1536,6 +1557,7 @@ async def test_program_sleeping_mid_line_is_not_a_question(term):
     await term("run", session="s", input="exit()")
 
 
+@needs("vi")
 async def test_fullscreen_region_closes_in_a_plain_shell(env):
     home, socket = env
     t = Term(home, socket)
@@ -1570,6 +1592,7 @@ async def test_expect_at_the_shell_sends_lines_one_at_a_time(term):
     await term("send", session="s", text="x\n")
 
 
+@needs("gdb")
 async def test_gdb_blocks_go_in_one_run(env):
     # Inside `while` gdb's continuation prompt is " >" (indented by depth):
     # a multi-line `run` stopped there, "N more lines not sent".
@@ -1580,6 +1603,7 @@ async def test_gdb_blocks_go_in_one_run(env):
     assert "not sent" not in out and "$1 = 101" in out and "$2 = 2" in out, out
 
 
+@needs("gdb")
 async def test_gdbs_pager_gets_its_own_hint(env):
     # "--Type <RET> for more" was offered as a prompt_pattern to pass.
     t = Term(*env)
@@ -1594,6 +1618,7 @@ async def test_gdbs_pager_gets_its_own_hint(env):
     assert "· ready ·" in out and "pager, not a question" not in out, out
 
 
+@needs("gdb")
 async def test_gdb_under_gdb_resumed_after_ctrl_c_is_waiting_not_working(term):
     # `continue` at (top-gdb) resumes the inner gdb at the (gdb) it printed
     # before the ctrl+c: nothing new appears, and the `run` sat out its timeout.
@@ -1610,6 +1635,7 @@ async def test_gdb_under_gdb_resumed_after_ctrl_c_is_waiting_not_working(term):
     assert "$1 = 42" in out, out
 
 
+@needs("gdb")
 async def test_expect_sends_lines_one_at_a_time(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -2147,7 +2173,7 @@ async def test_a_server_started_inside_a_session_gets_working_shells(env, monkey
     assert "exit 0" in out and "\nnested" in out, out
 
 
-@pytest.mark.skipif(shutil.which("ipython3") is None, reason="needs ipython3")
+@needs("ipython3")
 async def test_ipython_prompts_are_known(env):
     t = Term(*env)
     await t("session_create", name="s", env={"HOME": plain_home(env[0])})
@@ -2184,6 +2210,7 @@ async def test_prompt_pattern_keeps_continuation_prompts(env):
     assert "not sent" not in out and (env[0] / "hd").read_text() == "one\ntwo\n"
 
 
+@needs("gdb")
 async def test_run_with_a_prompt_pattern_at_the_shell_is_the_callers_command(term):
     out = await term("run", session="s", input="gdb -q -nx", prompt_pattern=r"\(gdb\) $")
     assert "[region 1 · $ gdb -q -nx · running" in out and "waiting for input at '(gdb)'" in out
@@ -2200,6 +2227,7 @@ async def test_expect_answers_a_question_already_on_screen(term):
     assert "sent line 'y'" in out and "GOT=y" in out
 
 
+@needs("gdb")
 async def test_a_job_surviving_ctrl_c_is_named(term):
     out = await term("run", session="s", input="gdb -q -nx 2>&1 | grep Breakpoint", timeout_s=2)
     assert "[in the foreground: gdb (pid " in out and "grep (pid " in out
@@ -2214,6 +2242,7 @@ async def test_a_job_surviving_ctrl_c_is_named(term):
     assert "[finished: region 1" in out
 
 
+@needs("gdb", "python3")
 async def test_a_busy_job_that_defers_ctrl_c_is_not_told_to_quit(term):
     """gdb printing a large array takes ctrl+c only when it next checks
     (about 50 s later).  While it is busy, the hints must not suggest ctrl+d
@@ -2286,6 +2315,7 @@ async def test_send_signal_ends_a_stuck_job(term):
         await term("send", session="s", signal="TERM", keys=["enter"])
 
 
+@needs("gdb")
 async def test_a_question_under_an_explicit_prompt_pattern_returns(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -2398,6 +2428,7 @@ async def test_session_list_puts_live_sessions_first_and_says_if_exit_statuses_a
         assert "plain shell (no exit statuses" in lines[1], out
 
 
+@needs("less")
 async def test_field_test_wordings(term):
     out = await term("run", session="s", input="true")
     assert "· exit 0 · no output ·" in out.splitlines()[0], out
@@ -2422,6 +2453,7 @@ async def test_an_interrupted_repl_input_does_not_stay_timed_out(term):
     await term("send", session="s", keys=["ctrl+d"])
 
 
+@needs("python3")
 async def test_a_search_hit_on_a_long_line_shows_the_part_around_it(term):
     # A hit on a 400,000-character line returned all of it.
     out = await term("run", session="s", input="python3 -c \"print('x' * 300000 + 'NEEDLE' + 'y' * 100000)\"; echo END")
@@ -2717,6 +2749,7 @@ async def test_a_send_in_flight_across_a_restart_is_not_repeated(served):
                 new.wait(timeout=10)
 
 
+@needs("gdb")
 async def test_a_humans_input_at_a_program_prompt_is_reported(env):
     """Inside gdb there are no shell markers: a command a human typed at
     the (gdb) prompt between the agent's calls must still become a region
@@ -2744,6 +2777,7 @@ async def test_a_humans_input_at_a_program_prompt_is_reported(env):
         human.kill()
 
 
+@needs("gdb")
 async def test_wait_waits_out_a_humans_unsubmitted_line(env):
     """A human's half-typed line at gdb's prompt: `run` is refused; `wait`
     waits for the line to go (erased or submitted) and says which."""
@@ -2876,6 +2910,7 @@ async def test_a_session_from_before_pane_ids_finds_its_pane(term):
 
 
 # What models tripped on in an evaluation.
+@needs("gdb")
 async def test_a_yes_no_question_is_answered_not_offered_a_prompt_pattern(env):
     t = Term(*env)
     await t("session_create", name="g", command="gdb -q -nx", env={"HOME": plain_home(env[0])})
@@ -2890,6 +2925,7 @@ async def test_a_yes_no_question_at_the_shell_names_its_default(term):
     await term("run", session="s", input="")
 
 
+@needs("python3")
 async def test_send_with_several_lines_to_a_program_is_noted_once(term):
     await term("run", session="s", input="python3 -q")
     out = await term("send", session="s", text="1+1\n2+2\n")
@@ -2898,6 +2934,7 @@ async def test_send_with_several_lines_to_a_program_is_noted_once(term):
     assert "types all its lines at once" not in out, out
 
 
+@needs("python3")
 async def test_a_prompt_pattern_at_launch_is_noted(term):
     out = await term("run", session="s", input="python3 -q", prompt_pattern=r">>> $")
     assert "prompt_pattern was not needed to start the program" in out, out
@@ -2982,6 +3019,7 @@ EPOLL_ON = ("import select, os, time; r, w = os.pipe(); e = select.epoll(); e.re
             "t = time.time(); e.poll(6); print('slept', round(time.time() - t))")
 
 
+@needs("/proc syscall")
 async def test_a_job_polling_other_fds_is_not_waiting_for_input(term):
     # A redirected `make check`: DejaGnu's expect waits in epoll on the ptys
     # of the gdb it runs, not on the terminal.  Called "waiting for input",
@@ -3002,6 +3040,7 @@ SELECT_ON = ("import select, os, time; r, w = os.pipe(); t = time.time(); "
              "select.select([{fd}], [], [], 6); print('slept', round(time.time() - t))")
 
 
+@needs("/proc syscall")
 async def test_a_job_selecting_on_other_fds_is_not_waiting_for_input(term):
     # `make -j check < /dev/null > log`: the parent make waits in pselect for
     # its jobs, which looked like an input loop on the terminal.
@@ -3016,6 +3055,7 @@ async def test_a_job_selecting_on_other_fds_is_not_waiting_for_input(term):
     await term("wait", session="s", timeout_s=10)
 
 
+@needs("/proc syscall")
 async def test_a_job_reading_another_pty_is_not_reading_the_terminal(term):
     # A plain `make -j check`: DejaGnu's expect reads its gdb's pty master,
     # the same kernel wait as reading the terminal -- "waiting for input
@@ -3029,6 +3069,7 @@ async def test_a_job_reading_another_pty_is_not_reading_the_terminal(term):
     assert "waiting for input" not in out and "read it" in out, out
 
 
+@needs("/proc syscall")
 async def test_helpers_waiting_elsewhere_do_not_hide_a_program_at_the_terminal(term):
     # Claude Code idle at its input box, its MCP helper processes (same
     # foreground group) waiting on sockets: the helpers made it "busy", and
@@ -3484,7 +3525,7 @@ async def test_a_second_hop_from_an_integrated_shell_is_seen(env):
     assert "now on host-a" in out, out  # back on A: its markers again
 
 
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="needs zsh")
+@needs("zsh")
 async def test_shell_integrate_integrates_zsh(term):
     await term("run", session="s", input="zsh -f", timeout_s=10)
     out = await term("shell_integrate", session="s", timeout_s=10)
@@ -3496,7 +3537,7 @@ async def test_shell_integrate_integrates_zsh(term):
     await term("run", session="s", input="exit", timeout_s=10)
 
 
-@pytest.mark.skipif(shutil.which("fish") is None, reason="needs fish")
+@needs("fish")
 async def test_shell_integrate_names_a_shell_it_cannot_integrate(term):
     await term("run", session="s", input="fish --no-config", timeout_s=10)
     out = await term("shell_integrate", session="s", force=True, timeout_s=10)
@@ -3504,7 +3545,7 @@ async def test_shell_integrate_names_a_shell_it_cannot_integrate(term):
     await term("send", session="s", text="exit\n")
 
 
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="needs zsh")
+@needs("zsh")
 async def test_session_create_zsh_is_integrated(env):
     home, socket = env
     t = Term(home, socket)
@@ -3524,6 +3565,7 @@ async def test_session_create_zsh_is_integrated(env):
     assert "exit 1" in out, out
 
 
+@needs("gdb")
 async def test_a_gdb_piped_to_tail_is_diagnosed_at_once(term):
     # tail blocked on the pipe made the job "busy": the note for a gdb
     # waiting at a prompt nobody can see came only after a ctrl+c killed tail.
@@ -3700,6 +3742,7 @@ async def test_wait_until_on_program_input(term):
     await term("send", session="s", keys=["ctrl+d"])
 
 
+@needs("/proc syscall")
 async def test_an_ssh_with_its_input_piped_is_not_a_remote_shell(term):
     # A script running `ssh host cmd` with its input piped (git, rsync, a
     # test harness) carries no terminal; taken for an interactive ssh, its
@@ -3775,7 +3818,7 @@ async def test_show_lists_every_match_in_order_when_they_fit(term):
     assert "distinct" not in out and "[x2" not in out, out
 
 
-@pytest.mark.skipif(not (shutil.which("gdb") and shutil.which("gcc")), reason="needs gdb and gcc")
+@needs("gdb", "gcc")
 async def test_gdb_with_debug_infrun_comes_back_ready(term):
     src = term.home / "s.c"
     src.write_text("int g;\nint main(void) {\n  g = 1;\n  g = 2;\n  g = 3;\n  return g;\n}\n")
@@ -3827,7 +3870,7 @@ async def test_habit_notes_are_once_per_agent_not_per_session(env):
         assert "[note:" not in out, out
 
 
-@pytest.mark.skipif(not shutil.which("gdb"), reason="needs gdb")
+@needs("gdb")
 async def test_gdb_under_gdb_names_which_gdb_reads_the_next_line(term):
     # An inner gdb at its own "(gdb)" was taken for the outer one: prompt
     # text cannot tell them apart; the processes can.
@@ -3847,7 +3890,7 @@ async def test_gdb_under_gdb_names_which_gdb_reads_the_next_line(term):
 
 
 
-@pytest.mark.skipif(not shutil.which("gdb"), reason="needs gdb")
+@needs("gdb")
 async def test_two_gdbs_both_at_gdb_get_the_set_prompt_hint(term):
     gdb = shutil.which("gdb")
     out = await term("run", session="s", timeout_s=60, input=(
@@ -3896,7 +3939,7 @@ async def test_an_ssh_running_one_command_is_not_a_login(term):
 
 
 
-@pytest.mark.skipif(not (shutil.which("gdb") and shutil.which("gcc")), reason="needs gdb and gcc")
+@needs("gdb", "gcc")
 async def test_quit_answered_then_the_shell_gets_the_rest(term):
     # `quit` + a new command line: "Quit anyway?" stopped the batch, an
     # `expect` call typed y, a third call ran the line.  Now the reply offers
@@ -3958,6 +4001,7 @@ c.connect(("127.0.0.1", port))
 """
 
 
+@needs("/proc syscall")
 async def test_a_process_blocked_in_connect_is_not_waiting_for_input(term):
     # connect() sleeps in wait_woken, as a terminal read does: a test wedged
     # on an unroutable host read "waiting for input (it is reading the
@@ -4047,6 +4091,7 @@ async def test_show_behind_a_tail_pipe_says_what_the_pipe_hid(term):
     assert "matched nothing" not in out, out
 
 
+@needs("python3")
 async def test_a_deleted_working_directory_is_reported(term, env):
     (env[0] / "out").mkdir()
     await term("run", session="s", input="cd out")
@@ -4125,6 +4170,7 @@ async def test_a_piped_test_run_that_ends_in_a_wait_gets_the_note_too(term):
     assert "[without `| tail -1`, this reply would have led with the run's FAIL lines and totals" in out, out
 
 
+@needs("make")
 async def test_pipe_notes_find_a_test_run_mid_list_and_behind_show(term):
     # A test run by its command, its tail showing only make's lines, mid-list.
     (term.home / "Makefile").write_text("check:\n\t@echo 'FAIL: gdb.base/a.exp: x'\n\t@echo 'make: *** [Makefile:1: check] Error 2'\n")
@@ -4156,6 +4202,7 @@ async def test_cpython_regrtest_is_a_test_run_too(term):
     assert "[without `| tail -2`, this reply would have led with the run's FAIL lines and totals" in out, out
 
 
+@needs("make")
 async def test_pipe_notes_only_for_a_test_command_piped_straight_into_tail(term):
     from docent_terminal_mcp.server import runs_tests
     assert runs_tests("PYTHONASYNCIODEBUG=1 /v/bin/pytest tests/a.py -x 2>&1")

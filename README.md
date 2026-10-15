@@ -287,6 +287,21 @@ when it changes, and regions that ran elsewhere are tagged `· on HOST`.
 Lines sent to a foreground program (gdb, python) become *input* regions
 ending at the next prompt (regex), when output settles, or at a timeout.
 
+**Waiting for input**: whether the foreground job waits on the terminal
+(at a prompt, or a question) or works.  First from where each of its
+processes sleeps (`ps`'s wait channel: a terminal read, poll, select,
+epoll, or something else), then, on x86_64 and aarch64, from the file
+descriptors the call it waits in watches (`/proc/PID/task/TID/syscall`
+and the process's memory), so that a job waiting on other things -- a
+`make check` whose expect polls its gdb's pty, a connect() -- is not
+taken for one at a prompt.  Reading those needs ptrace access, and the
+session's programs are not the server's descendants (the tmux server
+detaches).  With Yama's `ptrace_scope` at 1, the default on Ubuntu, only
+root has it: elsewhere the server goes by the wait channel alone, and
+such a job may be called "waiting for input".  `sysctl
+kernel.yama.ptrace_scope=0` gives it back, at a price: any process may
+then trace any other of the same user.
+
 **Memory**: rows that can no longer change live only in `session.txt`,
 read back through a byte-offset table.  3 million lines (a 25 MB log)
 peak at about 150 MB for the whole server process.
@@ -512,11 +527,26 @@ bubblewrap and NVIDIA OpenShell have been tried; they will be added to
 ## Tests
 
 ```sh
-uv run pytest
+uv run pytest -rs
 ```
 
 The end-to-end tests drive real tmux sessions on private sockets; some
-attach real tmux clients from Python ptys to stand in for a human.
+attach real tmux clients from Python ptys to stand in for a human.  They
+need only tmux and bash.  A test that needs anything else is skipped
+where it is missing, and `-rs` lists what each skipped test needed
+(`tests/needs.py` checks).  For the full run:
+
+- the programs the tests drive: gdb, a C compiler (`cc`, `gcc`),
+  python3, ipython3, less, vi, nano, top, make, zsh, fish, node, sqlite3,
+  guile and kermit.  On Fedora: `dnf install gdb gcc python3-ipython less
+  vim-minimal nano procps-ng make zsh fish nodejs sqlite guile ckermit`;
+  on Debian and Ubuntu: `apt install gdb gcc python3 ipython3 less
+  vim-tiny nano procps make zsh fish nodejs sqlite3 guile-3.0 ckermit`.
+- `ssh localhost` logging in with no password and no host key question
+  (an ssh server, and a key in `~/.ssh/authorized_keys`).
+- the server able to read a session program's `/proc/PID/syscall` (see
+  [How it works](#how-it-works)): Yama's `kernel.yama.ptrace_scope` 0, or
+  the tests run as root.
 
 ## License
 
