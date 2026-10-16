@@ -3499,7 +3499,8 @@ async def test_a_silent_command_on_another_host_is_not_waiting_for_input(env):
 async def test_a_pause_mid_line_on_another_host_is_waiting_only_at_a_question(env):
     # pytest -q over `docent-terminal-mcp ssh`: a slow test paused its line
     # of dots, and run and wait both came back "waiting for input" at
-    # '........' within seconds of a 1500 s timeout.
+    # '........' within seconds of a 1500 s timeout -- and at a row of
+    # exactly '...', which read as Python's continuation prompt.
     home, socket = env
     t = Term(home, socket)
     bin_dir = Path(home) / "fakebin"
@@ -3514,6 +3515,8 @@ async def test_a_pause_mid_line_on_another_host_is_waiting_only_at_a_question(en
     code = ("import select, sys; print('....', end='', flush=True); select.select([sys.stdin], [], [], 5); "
             "print('.. passed')")
     out = await t("run", session="s", input=f'{sys.executable} -c "{code}"', timeout_s=15)
+    assert "passed" in out and "exit 0" in out and "waiting for input" not in out, out
+    out = await t("run", session="s", input=f'{sys.executable} -c "{code.replace("....", "...")}"', timeout_s=15)
     assert "passed" in out and "exit 0" in out and "waiting for input" not in out, out
     out = await t("run", session="s", input="read -p 'Continue? [y/N] ' a; echo got=$a", timeout_s=15)
     assert "waiting for input" in out, out
