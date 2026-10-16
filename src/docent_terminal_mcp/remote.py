@@ -168,6 +168,20 @@ def install_argv(args: list[str], remove: bool = False, ssh: str = "ssh") -> lis
     return [ssh, *options, dest, "exec sh -c '" + install_script(remove) + "'"]
 
 
+# su's options that run a command instead of an interactive shell.
+SU_COMMAND_OPTS = ("-c", "--command", "--session-command", "-C")
+
+
+def su_argv(args: list[str], nonce: str | None, carry: dict[str, str] | None = None) -> list[str]:
+    """`NAME su [su options] [-] [user]`: su with the bootstrap as the
+    target user's command.  --session-command, not -c: -c starts a new
+    session without the terminal (no job control, no ctrl+c)."""
+    if any(a in SU_COMMAND_OPTS or a.startswith(tuple(o + "=" for o in SU_COMMAND_OPTS if o.startswith("--")))
+           for a in args):
+        raise ValueError(f"{NAME} su opens an interactive shell; for a command use plain su -c")
+    return ["su", "--session-command", "exec sh -c '" + bootstrap(nonce, carry=carry) + "'", *args]
+
+
 def into_argv(command: list[str], nonce: str | None, carry: dict[str, str] | None = None) -> list[str]:
     """`NAME into COMMAND...`: COMMAND is how a program is run somewhere
     else with a terminal -- `openshell sandbox exec -n box --tty --`,

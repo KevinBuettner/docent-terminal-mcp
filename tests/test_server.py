@@ -4309,3 +4309,89 @@ def test_ssh_and_into_carry_the_variables_the_session_names():
     out = subprocess.run(["sh", "-c", "\n".join(setup) + '\nprintf "%s|%s|%s" "$DOCENT_TERMINAL_MCP_SSH_ENV" "$EDITOR_ID" "$ODD"'],
                          capture_output=True, text=True, check=True).stdout
     assert out == "|".join([environ["DOCENT_TERMINAL_MCP_SSH_ENV"], "review", environ["ODD"]]), out
+
+
+@pytest.mark.second_guess
+async def test_a_habit_is_second_guessed_once_and_runs_when_sent_again(term):
+    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        await term("run", session="s", input="seq 1 5 | tail -2")
+    assert '`run` session="s" input="seq 1 5" last_lines=2' in str(e.value), e.value
+    assert "send the same input again, unchanged: it runs as it is" in str(e.value)
+    out = await term("regions", session="s")
+    assert "seq 1 5" not in out, out  # nothing was typed
+    out = await term("run", session="s", input="seq 1 5 | tail -2")  # the same line again: it runs
+    assert out.splitlines()[1:3] == ["4", "5"], out
+    assert "[note:" not in out, out  # the refusal said it: no note on top
+    out = await term("run", session="s", input="seq 1 9 | tail -3")
+    assert out.splitlines()[1:4] == ["7", "8", "9"], out  # declined: not asked again
+    out = await term("run", session="s", input="seq 1 3", last_lines=2)
+    assert out.splitlines()[-2:] == ["2", "3"], out
+
+
+@pytest.mark.second_guess
+async def test_each_habit_gets_its_own_second_guess(term):
+    async def refused(line, *wanted):
+        with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+            await term("run", session="s", input=line)
+        for w in wanted:
+            assert w in str(e.value), e.value
+    await refused("seq 1 3 2>&1 | tee kept.log | tail -1", 'input="seq 1 3 2>&1" last_lines=1 save_to="kept.log"')
+    await refused("seq 1 3 > out.log 2>&1", 'input="seq 1 3" save_to="out.log"')
+    await refused("sleep 30 &", 'input="sleep 30" timeout_s=1500', "session_split")
+    await refused("sleep 30; cat out.log", "the `wait` tool", '"until COND; do sleep 1; done; cat out.log"')
+    await refused("set -e; false", 'input="( set -e; false )"', "exits the shell")
+    # Lines that are none of these run at once.
+    for line in ("seq 1 3 > /dev/null 2>&1", "sleep 1; cat /dev/null", "seq 1 3 >> out.log 2>&1", "echo a | tail -f -",
+                 "( set -e; true )", "bash -ec 'set -e; true'"):
+        out = await term("run", session="s", input=line, timeout_s=3)
+        assert "not typed" not in out, out
+
+
+@pytest.mark.second_guess
+async def test_a_plain_ssh_or_su_is_offered_the_hop_that_carries_the_integration(term, env):
+    # The session's bashrc puts the shim on PATH after the shell starts, out
+    # of /proc/PID/environ's sight: the full path, which is there for certain.
+    shim = env[0] / "bin" / "dtmcp"
+    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        await term("run", session="s", input="ssh -l root nowhere.invalid")
+    assert f'`run` session="s" input="{shim} ssh -l root nowhere.invalid"' in str(e.value), e.value
+    assert "`docent-terminal-mcp ssh` takes the same arguments" in str(e.value)
+    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        await term("run", session="s", input="su - nobody")
+    assert f'input="{shim} su - nobody"' in str(e.value), e.value
+    # On the PATH the shell started with: the short name.
+    await term("session_create", name="p", cwd=str(env[0]),
+               env={"HOME": plain_home(env[0]), "PATH": f"{shim.parent}:/usr/bin:/bin"})
+    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        await term("run", session="p", input="ssh nowhere.invalid")
+    assert 'input="dtmcp ssh nowhere.invalid"' in str(e.value), e.value
+
+
+@pytest.mark.second_guess
+async def test_a_shell_without_the_integration_is_second_guessed(term):
+    out = await term("run", session="s", input="env -i PS1='plain$ ' bash --norc --noprofile -i", timeout_s=5)
+    assert "plain$" in out, out
+    with pytest.raises(AssertionError, match="has no shell integration") as e:
+        await term("run", session="s", input="echo hi")
+    assert '`shell_integrate` session="s"' in str(e.value), e.value
+    out = await term("run", session="s", input="echo hi")  # sent again: it runs
+    assert "hi" in out.splitlines()[1:], out
+    out = await term("run", session="s", input="exit")
+
+
+def test_su_carries_the_bootstrap_as_its_session_command():
+    from docent_terminal_mcp.remote import su_argv
+    argv = su_argv(["-", "dtest"], "abc123")
+    assert argv[:2] == ["su", "--session-command"] and argv[3:] == ["-", "dtest"]
+    assert argv[2].startswith("exec sh -c '") and "export __DTMCP_NONCE=abc123" in argv[2]
+    for bad in (["-c", "id"], ["--command=id"], ["--session-command", "id"]):
+        with pytest.raises(ValueError):
+            su_argv(bad, None)
+
+
+def test_which_lines_are_plain_hops():
+    from docent_terminal_mcp.server import hop_without_integration as hop
+    assert [hop(l) for l in ("ssh h", "ssh -p 22 -l root h", "su", "su - dtest", "su -s /bin/zsh dtest")] == \
+        ["ssh", "ssh", "su", "su", "su"]
+    assert {hop(l) for l in ("ssh h ls", "ssh -N -L 1:a:2 h", "ssh -fN h", "su -c id", "su - a b", "sudo -i",
+                             "ssh h; ls", "dtmcp ssh h", "ssh \"$H\"")} == {None}

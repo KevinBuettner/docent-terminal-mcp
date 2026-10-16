@@ -200,6 +200,8 @@ the client.
   command in replies and `/api/sessions`, for a server that runs where a
   person cannot run tmux directly: `openshell sandbox exec -n NAME --tty
   --`, `podman exec -it NAME`, `ssh -t HOST`.
+- `DOCENT_TERMINAL_MCP_SECOND_GUESS` -- `0` turns off the second
+  guesses (see below).
 - `DOCENT_TERMINAL_MCP_HOME` -- default `~/.local/state/docent-terminal-mcp`.
 - `DOCENT_TERMINAL_MCP_SOCKET` -- tmux socket name, default
   `docent-terminal-mcp`.
@@ -260,6 +262,40 @@ This writes `terminal-sessions/SKILL.md` (the instructions' two parts and
 the patterns) with one reference file per other topic.  Both are
 generated from `guide.py`, so the skill and the server say the same
 thing.
+
+### Second guesses
+
+Guidance read once, or a note after the fact, did not change a habit
+within a run: the models saw the `| tail` note and piped the next test
+run anyway "out of shell habit".  So for a few habits `run` asks before
+it types anything.  The first time an agent sends such a line, the line
+is refused, with why and the call to make instead, ready to copy.  The
+same line sent again, unchanged, runs as it is, and that agent is not
+asked about that habit again on this server.  So a deliberate choice costs
+one call per habit.  The habits:
+
+- `| tail -N` ending the line (`| tee FILE | tail -N` too): `last_lines=N`,
+  plus `save_to=FILE` for the tee;
+- `> FILE 2>&1` or `&> FILE` ending the line, in a shell on this host:
+  `save_to=FILE`, which keeps both the file and the log;
+- a trailing `&`: the command in the foreground with a long `timeout_s`,
+  other work in another session;
+- `sleep N; cat ...` (5 s or more, before a command that looks):
+  `wait` with `until=`, or an `until COND; do sleep 1; done` loop;
+- `set -e` at an interactive prompt, which closes the shell at the next
+  failing command: the line in a subshell, `( set -e; ... )`;
+- a plain `ssh HOST` or `su [-] [USER]`: `docent-terminal-mcp ssh` or
+  `docent-terminal-mcp su`, which carry the shell integration along.
+  This is offered only for a shell on this host, running as the server's
+  user, so the command is certain to be there: as `dtmcp` when that
+  shell's PATH (as it started) finds this server's shim, else by its
+  full path;
+- a line typed at a shell's prompt that has no integration (after a plain
+  `su`, `sudo -i` or `ssh`): `shell_integrate` first.  This is skipped
+  when the integration is known not to be installed there.
+
+`DOCENT_TERMINAL_MCP_SECOND_GUESS=0` turns them off.  The tests run with
+them off except where a test is marked `second_guess`.
 
 ## How it works
 
@@ -432,6 +468,14 @@ is the choice to do this.  `docent-terminal-mcp ssh --print host` shows
 the ssh command and the script.  Sessions have the command on their PATH
 (a shim in `$DOCENT_TERMINAL_MCP_HOME/bin`).  Replies say which host a
 session is on, and when that changes.
+
+**Another user.**  `docent-terminal-mcp su [su options] [-] [user]`, in
+place of `su`, does the same for a shell of another user on the session's
+host.  The bootstrap goes as su's `--session-command` (util-linux), not
+`-c`: `-c` starts a new session without the terminal, with no job
+control and no ctrl+c.  `--print` shows the command and the script.
+`sudo -i` has no such way in (sudo escapes the command's newlines);
+`shell_integrate` after it reads the server's own files, as root can.
 
 `DOCENT_TERMINAL_MCP_SSH_ENV`, a list of variable names set in the
 session (by the client that created it, through `session_create`'s

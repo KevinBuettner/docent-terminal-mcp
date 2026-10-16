@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import signal as signal_module
 import stat as stat_module
 import sys
@@ -1250,7 +1251,7 @@ def is_carrier_command(command: str) -> bool:
         return False
     prog = os.path.basename(argv[0])
     if prog == NAME:
-        return argv[1:2] in (["ssh"], ["into"])
+        return argv[1:2] in (["ssh"], ["into"], ["su"])
     return prog in REMOTE_CLIENTS or (prog in CONTAINER_CLIENTS and container_entry(argv) is not None)
 
 
@@ -2355,6 +2356,189 @@ def habit_notes(s: Session, command: str, regions: list[Region]) -> list[str]:
     return out
 
 
+# Second guesses: a line refused once, before anything is typed, with the
+# call that serves better -- the same line sent again runs as it is, and
+# that agent is not second-guessed about that habit again.  The notes
+# above come after the command and did not change a habit within a run
+# (four tailcall runs: "did it anyway out of shell habit"); a refusal
+# comes before, and costs at most one call per habit.  Kevin's idea, from
+# Claude Code's refusal of `sleep N; cat`.
+SECOND_GUESS_ON = os.environ.get("DOCENT_TERMINAL_MCP_SECOND_GUESS", "1") != "0"
+GUESS_PENDING: dict[str, str] = {}  # "sessions dir:agent:habit" -> the line refused
+GUESS_DECLINED: set[str] = set()  # ... whose agent sent the refused line again
+# The note a habit's refusal stands in for (said there; not again after).
+GUESS_NOTES = {"pipe_tail": "pipe_tail", "redirect": "redirect_log", "background": "background_job"}
+
+# `| tail [-n] N` ending the line, after an optional `| tee FILE`.
+TAIL_END = re.compile(r"^(?P<cmd>.*?\S)(?:\s*\|\s*tee\s+(?P<tee>[^\s|;&<>-][^\s|;&<>]*))?"
+                      r"\s*\|\s*tail(?:\s+(?:-n\s*|-)(?P<n>\d+))?\s*$")
+# `> FILE 2>&1` or `&> FILE` ending the line (not >>: save_to rewrites the file).
+REDIRECT_END = re.compile(r"^(?P<cmd>.*?\S)\s*(?:(?<![<>&\d])>\s*(?P<a>[^\s;|&<>]+)\s+2>&1|(?<!&)&>\s*(?P<b>[^\s;|&<>]+))\s*$")
+BACKGROUND_END = re.compile(r"(?<![&|>])&\s*$")
+# `sleep N; cat log`: polling for something to happen.
+SLEEP_POLL = re.compile(r"^\s*sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)\s*(?:;|&&)\s*(?P<rest>\S.*)$")
+# `set -e` (or -o errexit) at the line's top level, not inside ( ) or bash -c.
+SET_ERREXIT = re.compile(r"^\s*(?:[^()'\"]*[;&|]\s*)?set\s+(?:-[a-zA-Z]*e[a-zA-Z]*|-o\s+errexit)\b")
+POLL_READERS = {"cat", "tail", "head", "grep", "egrep", "rg", "ls", "wc", "ps", "pgrep", "stat", "du", "jobs",
+                "curl", "ss", "netstat", "test", "[", "less", "tac", "file", "find", "nvidia-smi", "squeue"}
+
+
+def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> None:
+    """Refuse `line` with why and what instead, the first time this agent
+    shows `habit` on this server -- unless it is the line refused last time,
+    sent again: then it runs, and the habit is not refused again."""
+    key = f"{s.dir.parent}:{ACTOR.get()}:{habit}"
+    if not SECOND_GUESS_ON or key in GUESS_DECLINED:
+        return
+    if GUESS_PENDING.get(key) == line:
+        del GUESS_PENDING[key]
+        GUESS_DECLINED.add(key)
+        return
+    GUESS_PENDING[key] = line
+    if habit in GUESS_NOTES:
+        HABITS_NOTED.add(f"{s.dir.parent}:{ACTOR.get()}:{GUESS_NOTES[habit]}")
+    raise ToolError(
+        f"not typed -- a second guess, made once: {why}  {instead}  "
+        "If the line is what you meant, send the same input again, unchanged: it runs as it is, and this is not "
+        "asked again.")
+
+
+def as_run(s: Session, **args) -> str:
+    """A `run` call to copy: `run` session="s" input="..." last_lines=5."""
+    return "`run` " + " ".join(f"{k}={json.dumps(v, ensure_ascii=False)}"
+                               for k, v in {"session": s.name, **args}.items())
+
+
+async def own_command(s: Session) -> str | None:
+    """How the shell at the prompt runs this server's own command (`dtmcp`
+    when that shell's PATH finds this server's shim, else the shim's full
+    path) -- only for a shell on this host, as this user: one elsewhere, or
+    of another user, may not have it or not be able to run it.  The PATH
+    is the shell's as it started (/proc/PID/environ)."""
+    shim = s.dir.parent.parent / "bin" / SHORT
+    try:
+        info = await s.tmux.pane_info(s.name)
+        shells = [p for p in await foreground_processes(info.tty) if os.path.basename(p.command.lstrip("-")) in SHELLS]
+        if len(shells) != 1 or os.stat(f"/proc/{shells[0].pid}").st_uid != os.getuid() or not os.access(shim, os.X_OK):
+            return None
+        environ = Path(f"/proc/{shells[0].pid}/environ").read_bytes().split(b"\0")
+    except (TmuxError, OSError):
+        return None
+    path = next((e[5:].decode(errors="replace") for e in environ if e.startswith(b"PATH=")), "")
+    found = shutil.which(SHORT, path=path)
+    try:
+        return SHORT if found and os.path.samefile(found, shim) else shlex.quote(str(shim))
+    except OSError:
+        return shlex.quote(str(shim))
+
+
+SSH_NO_SHELL = set("NfWOTGVQ")  # ssh options with no interactive shell at the far end
+SU_VALUE_OPTS = {"-s", "--shell", "-g", "--group", "-G", "--supp-group", "-w", "--whitelist-environment"}
+
+
+def hop_without_integration(line: str) -> str | None:
+    """"ssh" or "su" when `line` is a plain interactive ssh or su -- which
+    leaves a shell without the integration at the far end."""
+    from .remote import SU_COMMAND_OPTS, split_destination
+    if not re.fullmatch(r"[\w@.:/=+,~%-]+(?: +[\w@.:/=+,~%-]+)*\s*", line.strip()):
+        return None  # (a list, a pipe, quoting, a variable: not the plain hop)
+    argv = line.split()
+    if argv[0] == "ssh":
+        parts = split_destination(argv[1:])
+        if parts is None or parts[2] or any(a.startswith("-") and not a.startswith("--") and SSH_NO_SHELL & set(a[1:])
+                                            for a in parts[0]):
+            return None
+        return "ssh"
+    if argv[0] == "su":
+        args, users = argv[1:], []
+        while args:
+            a = args.pop(0)
+            if a in SU_COMMAND_OPTS or a.startswith("--command") or a.startswith("--session-command"):
+                return None
+            if a in SU_VALUE_OPTS:
+                args = args[1:]
+            elif a == "-" or not a.startswith("-"):
+                users += [a] if a != "-" else []
+        return "su" if len(users) <= 1 else None
+    return None
+
+
+async def second_guesses(s: Session, line: str, last_lines: int | None, save_to: str | None) -> None:
+    """The second guesses for a line typed at a shell's prompt."""
+    if "\n" in line:
+        return
+    if (hop := hop_without_integration(line)) and (cmd := await own_command(s)):
+        what = "the host" if hop == "ssh" else "the user"
+        second_guess(
+            s, f"hop_{hop}", line,
+            f"a plain `{hop}` leaves a shell without the shell integration on {what}'s side: replies there "
+            "cannot tell when a command ends or how it ended (no exit status; a quiet command comes back "
+            "\"settled\" as if done), and further hops go unseen.",
+            f"`{NAME} {hop}` takes the same arguments and carries the integration along for this {hop} (nothing "
+            f"is installed): {as_run(s, input=cmd + ' ' + line.strip())}.")
+    if not s.at_shell_prompt and s.shell_in_front() and s.at_plain_shell_prompt():
+        # A shell without the integration (su, sudo -i, ssh): a reply cannot
+        # tell when a command ends -- a quiet `make check` came back "settled"
+        # at once, and only `wait` with an until= found its end.
+        place = await s.where()
+        if place is None or place.via == "shell" or not integration_missing_since(s, place.label()):
+            where = f" ({place.label()})" if place is not None else ""
+            second_guess(
+                s, "plain_shell", line,
+                f"the shell at this prompt{where} has no shell integration, so a reply cannot tell when a command "
+                "ends or how: no exit status, and a command quiet for a few seconds comes back \"settled\" as if "
+                "it were done.",
+                f"`shell_integrate` session={json.dumps(s.name)} adds it in one call (bash or zsh); then send this "
+                "line.")
+    if m := BACKGROUND_END.search(line):
+        second_guess(
+            s, "background", line,
+            "a job started with `&` cannot be waited for -- the `wait` tool waits for the foreground, and its "
+            "output and exit status come with no reply.",
+            f"In the foreground, with the reply when it ends: {as_run(s, input=line[:m.start()].rstrip(), timeout_s=1500)} "
+            "(a client that moves long calls to the background, as Claude Code does, tells you then); other work "
+            "meanwhile goes in another session (session_create, or session_split beside this one).")
+    if last_lines is None and (m := TAIL_END.match(line)):
+        n = int(m["n"] or 10)
+        args = {"input": m["cmd"], "last_lines": n}
+        tee = m["tee"] and save_to is None and await s.where() is None
+        if m["tee"] and not tee:
+            args["input"] = line[:line.rindex("|")].rstrip()
+        elif tee:
+            args["save_to"] = m["tee"]
+        second_guess(
+            s, "pipe_tail", line,
+            f"`| tail` lets only its {n} line{'s' if n != 1 else ''} reach the session: the log, the `read` and "
+            "`search` tools and a human watching never see the rest, and a reply already keeps the first and "
+            "last lines of long output (a test run's FAIL lines and totals first).",
+            f"The same {n} lines in the reply, all of the output kept: {as_run(s, **args)}."
+            + ("  (save_to writes the file, as the tee would.)" if tee else ""))
+    if save_to is None and (m := REDIRECT_END.match(line)) and (target := m["a"] or m["b"]) != "/dev/null" \
+            and await s.where() is None:
+        second_guess(
+            s, "redirect", line,
+            "this output goes to the file only: not to this session's log, so the `read` and `search` tools, "
+            "`show` and a human watching never see it.",
+            f"Both, the file and the log: {as_run(s, input=m['cmd'], save_to=target.strip(chr(39) + chr(34)))}.")
+    if SET_ERREXIT.search(line):
+        second_guess(
+            s, "errexit", line,
+            "`set -e` typed at this shell's prompt stays on in it: the first command that fails later -- a "
+            "test run, a grep that finds nothing -- exits the shell, and the session with it (an eval build's "
+            "`set -e; ...` left one so, and a later pytest's exit 4 closed it).",
+            f"For this line only: {as_run(s, input='( ' + line.strip() + ' )')} -- the subshell takes the set -e "
+            "with it.")
+    if (m := SLEEP_POLL.match(line)) and float(m["n"]) * {"": 1, "s": 1, "m": 60, "h": 3600}[m["unit"]] >= 5 \
+            and os.path.basename(m["rest"].split()[0]) in POLL_READERS:
+        second_guess(
+            s, "sleep_poll", line,
+            "a fixed sleep before looking waits the whole time, however soon the thing is ready, and it may not "
+            "be ready by then either.",
+            "For a command running in a session: the `wait` tool on it, with until=REGEX (it returns the moment "
+            "the output matches) or a timeout_s up to 1500.  For a file or a condition: "
+            f"{json.dumps('until COND; do sleep 1; done; ' + m['rest'])} returns as soon as it holds.")
+
+
 async def interrupt_notes(s: Session, regions: list[Region]) -> list[str]:
     """For a command of the caller's that ended by SIGINT (130) when an
     attached human's terminal had just sent input: say that the ctrl+c was
@@ -3051,6 +3235,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             if integrated_note := await integrate_adopted(s):
                 forced += integrated_note + "\n"
             pattern = call_prompt(s, prompt_pattern)
+            if s.at_shell_prompt or (s.shell_in_front() and s.at_plain_shell_prompt()):
+                await second_guesses(s, input, last_lines, save_to)
             were_open = open_command_ids(s) | s.open_at_reply
             # A ctrl+c seen not to stop the last command says nothing about
             # this one (it may well stop it).
@@ -4368,6 +4554,26 @@ def into_main(args: list[str]) -> None:
         sys.exit(f"{NAME} into: {argv[0]}: {e.strerror}")
 
 
+def su_main(args: list[str]) -> None:
+    """`NAME su [--print] [su options] [-] [user]` (see remote.su_argv)."""
+    from .remote import bootstrap, carried, su_argv
+    show = args[:1] == ["--print"]
+    nonce = os.environ.get("__DTMCP_NONCE")
+    carry = carried(dict(os.environ))
+    try:
+        argv = su_argv(args[1:] if show else args, nonce, carry)
+    except ValueError as e:
+        sys.exit(str(e))
+    if show:
+        print(shlex.join(argv[:2]) + " 'exec sh -c <the script below>' " + shlex.join(argv[3:]) + "\n")
+        print(bootstrap(nonce, readable=True, carry=carry), end="")
+        return
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as e:
+        sys.exit(f"{NAME} su: {argv[0]}: {e.strerror}")
+
+
 def install_main(args: list[str]) -> None:
     """`NAME install [--print] [--remove] [ssh options] [user@]host`: the
     integration files into the host's ~/.local/share (see remote.py)."""
@@ -4522,6 +4728,13 @@ def main() -> None:
         f"{NAME} into podman exec -it box    {NAME} into openshell sandbox exec -n box --tty --"))
     p_into.add_argument("--print", action="store_true", help="print the command line and its script, do not run it")
     p_into.add_argument("command", nargs=argparse.REMAINDER, help="the command, up to where the program to run would go")
+    p_su = sub.add_parser("su", help=(
+        f"su to another user with the shell integration carried along, as `{NAME} ssh` does over ssh: "
+        f"{NAME} su [su options] [-] [user]"))
+    p_su.add_argument("--print", action="store_true", help="print the su command line and its script, do not run it")
+    p_su.add_argument("su_args", nargs=argparse.REMAINDER, help="su's options and the user")
+    if sys.argv[1:2] == ["su"]:
+        return su_main(sys.argv[2:])
     if sys.argv[1:2] == ["install"]:
         return install_main(sys.argv[2:])
     if sys.argv[1:2] == ["into"]:

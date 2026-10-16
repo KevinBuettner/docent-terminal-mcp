@@ -27,3 +27,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["second_guess: run with second guesses on (tests/conftest.py)"]
