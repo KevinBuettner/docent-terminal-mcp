@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import difflib
 import functools
 import inspect
 import json
@@ -1775,6 +1776,7 @@ STATUS_HINTS = {
 # pending-breakpoint question, no: the breakpoint is silently not set.
 GDB_YES_NO = re.compile(r"\((?:\[y\]|y) or (?:\[n\]|n)\)\s*$")  # gdb's own style: "(y or n)", "(y or [n])"
 YES_NO = re.compile(r"[(\[]\s*(\[?)(y|yes)(\]?)\s*(?:or|/)\s*(\[?)(n|no)(\]?)\s*[)\]]\s*[?:]?\s*$", re.IGNORECASE)
+YES_NO_ANSWER = re.compile(r"y|yes|n|no", re.IGNORECASE)
 
 
 def yes_no_hint(text: str) -> str | None:
@@ -2561,6 +2563,16 @@ async def interrupt_notes(s: Session, regions: list[Region]) -> list[str]:
     return notes
 
 
+def saved_terminal(pid: int, tty: str) -> bool:
+    """Has the process the terminal open past fds 0-2: a copy of its
+    original output, kept while fd 1 goes elsewhere?"""
+    try:
+        return any(int(fd) > 2 and os.readlink(f"/proc/{pid}/fd/{fd}") in (tty, "/dev/tty")
+                   for fd in os.listdir(f"/proc/{pid}/fd"))
+    except (OSError, ValueError):
+        return False
+
+
 def output_nowhere(jobs: list[Process], tty: str) -> str | None:
     """Why nothing of a running job reaches the terminal, when nothing does:
     no foreground process writes to it, and the end of the pipeline writes
@@ -2574,9 +2586,15 @@ def output_nowhere(jobs: list[Process], tty: str) -> str | None:
             continue
     if not outs or any(t == tty or t.startswith(("/dev/pts/", "/dev/tty")) for _, t in outs):
         return None
+    if any(saved_terminal(p.pid, tty) for p, _ in outs):
+        # pytest's capture: while a test runs, fd 1 is its temporary file,
+        # and its dots go to the terminal through a copy of the original.
+        return None
     for p, target in outs:
         if target.startswith("pipe:"):
             continue
+        if target.endswith(" (deleted)"):
+            return None  # a temporary file, unlinked: a file all the same
         try:
             if stat_module.S_ISREG(os.stat(target).st_mode):
                 return None
@@ -2908,11 +2926,41 @@ class Actors:
         return unique
 
 
+def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
+    """The refusal of a call with arguments the tool does not have."""
+    def abbreviates(k: str, n: str) -> bool:  # "cmd" for "command", not "cwd"
+        letters = iter(n)
+        return k[:1] == n[:1] and all(c in letters for c in k)
+
+    def guess(k: str) -> str:
+        near = ([n for n in known if abbreviates(k, n) or k.startswith(n)]
+                or difflib.get_close_matches(k, known, 1))
+        return f"{k!r} (did you mean {near[0]!r}?)" if near else repr(k)
+    names = ", ".join(guess(k) for k in unknown)
+    return (f"{tool} has no argument{'s' if len(unknown) > 1 else ''} {names}; nothing was done.  "
+            f"Its arguments: {', '.join(known)}")
+
+
+class Server(MCPServer):
+    """An argument a tool does not have is refused, not dropped: codex's
+    models carried their own shell tool's names over -- session_create
+    cmd="gdb -q ./avg" started bash, silently, and `run` got
+    yield_time_ms and max_output_tokens."""
+
+    async def call_tool(self, name, arguments, context=None):
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None:
+            known = list(tool.parameters.get("properties", {}))
+            if unknown := [k for k in arguments if k not in known]:
+                raise ToolError(unknown_arguments(name, unknown, known))
+        return await super().call_tool(name, arguments, context)
+
+
 def build_server(home: Path | None = None, socket: str | None = None, shared: bool = False) -> MCPServer:
     home = home or Path(os.environ.get("DOCENT_TERMINAL_MCP_HOME", Path.home() / ".local/state/docent-terminal-mcp"))
     socket = socket or os.environ.get("DOCENT_TERMINAL_MCP_SOCKET", "docent-terminal-mcp")
     mgr = Manager(home, socket)
-    mcp = MCPServer("docent-terminal-mcp", instructions=INSTRUCTIONS)
+    mcp = Server("docent-terminal-mcp", instructions=INSTRUCTIONS)
     mcp.terminal_manager = mgr  # for the HTTP endpoints of the shared server
     logged = call_logger(home / "calls.log", Actors(shared), mgr)
 
@@ -3338,8 +3386,13 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 if region.status != "ready" and i + 1 < len(lines):
                     left = len(lines) - i - 1
                     rest = lines[i + 1:]
-                    if region.status == "waiting" and (asked := s.term.cursor_text().strip()) \
-                            and YES_NO.search(asked + " "):
+                    asked = s.term.cursor_text().strip() if region.status == "waiting" else ""
+                    if asked and YES_NO.search(asked + " ") and YES_NO_ANSWER.fullmatch(rest[0].strip()):
+                        # The next line is that question's answer, written
+                        # ahead ("quit", "y"): send it.  Held back, the reply
+                        # said to send "y\ny" -- the second y into the shell.
+                        continue
+                    if asked and YES_NO.search(asked + " "):
                         # Copy-ready: the answer first, then the rest, in one call.
                         again = "\\n".join(["y"] + rest).replace('"', '\\"')
                         parts.append(f"[stopped: {left} more line{'s' if left > 1 else ''} not sent -- it asks "

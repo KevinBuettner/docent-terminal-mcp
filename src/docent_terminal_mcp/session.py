@@ -266,7 +266,7 @@ DEBUG_TAIL_ROWS = 40  # how far up a prompt followed by a program's debug lines 
 DEBUG_LINE = re.compile(r"^\s*\[[a-z][\w -]*\] ")  # gdb's "set debug" output: "[infrun] ...", "  [remote] ..."
 PARTIAL_LINE_QUIET_S = 1.5
 QUESTION_ENDS = ("?", ":", ")", "]")  # how questions end ("(y or n)", "[Y/n]"); prompts end in > $ #
-FOREGROUND_STABLE_S = 1.0  # at the start of a line, "waiting for input" needs a state this old
+FOREGROUND_STABLE_S = 1.0  # "waiting for input" with no prompt to go by needs a state this old
 EXPECT_OVERLAP_ROWS = 50
 MULTILINE_QUIET_S = 2.0
 REGION_FILES = 8  # region files kept, most recently used first
@@ -1608,7 +1608,11 @@ class Session:
         # too.  There, only a line shaped like a question counts.
         if self.remote_command() is not None and not self.term.cursor_text().rstrip().endswith(QUESTION_ENDS):
             return False
-        return quiet >= PARTIAL_LINE_QUIET_S
+        # No prompt to go by: the processes' state must hold, as at the start
+        # of a line.  pytest's dots during a slow test: its epoll_wait, seen
+        # once with its thread between calls, read as an input loop, and the
+        # call returned "waiting for input" at a row of dots.
+        return quiet >= PARTIAL_LINE_QUIET_S and time.monotonic() - self.foreground_since >= FOREGROUND_STABLE_S
 
     async def run_shell_command(
         self, line: str, pattern: re.Pattern, timeout_s: float, until: re.Pattern | None = None,

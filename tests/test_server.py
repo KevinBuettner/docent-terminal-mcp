@@ -4097,6 +4097,35 @@ async def test_quit_answered_then_the_shell_gets_the_rest(term):
     assert "$ echo after-quit · exit 0" in out, out
 
 
+@needs("gdb", "gcc")
+async def test_an_answer_written_ahead_is_sent_to_its_question(term):
+    # DeepSeek under codex sent "quit\ny": the y was held back, and the
+    # reply said to send "y\ny" -- the second y for the shell.
+    src = term.home / "q.c"
+    src.write_text("int main(void) { return 0; }\n")
+    subprocess.run(["gcc", "-g", "-o", str(term.home / "q"), str(src)], check=True)
+    await term("run", session="s", timeout_s=30,
+               input=f"gdb -q -nx -iex 'set debuginfod enabled off' -ex 'break main' -ex run {term.home}/q")
+    out = await term("run", session="s", input="quit\ny\necho after-quit", timeout_s=20)
+    assert "not sent" not in out, out
+    assert "Quit anyway? (y or n) y · finished" in out, out
+    assert "$ echo after-quit · exit 0" in out.split("went to the shell")[1], out
+
+
+async def test_an_argument_the_tool_does_not_have_is_refused(term):
+    # codex's models used their own shell tool's names: session_create
+    # cmd="gdb -q ./avg" started bash, and nothing said so.
+    with pytest.raises(AssertionError) as e:
+        await term("session_create", name="g", cmd="sleep 100")
+    assert "session_create has no argument 'cmd' (did you mean 'command'?); nothing was done." in str(e.value)
+    assert "Its arguments: name, command, cwd," in str(e.value)
+    with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="echo hi", yield_time_ms=1000, max_output_tokens=2000)
+    assert "run has no arguments 'yield_time_ms', 'max_output_tokens'; nothing was done." in str(e.value)
+    out = await term("session_list")
+    assert "\ng\t" not in "\n" + out, out
+
+
 
 async def test_a_job_whose_output_reaches_nothing_says_so(term):
     # `make check 2>&1 | tee F | tail -3000 > /dev/null`: nothing reached the
@@ -4106,6 +4135,42 @@ async def test_a_job_whose_output_reaches_nothing_says_so(term):
     assert "`until` 'Running' did not match within 3 s" in out, out
     assert ("nothing it prints reaches the terminal: tail's output goes to /dev/null -- `until`, `show` and this "
             "session's log see none of it") in out, out
+    await term("send", session="s", keys=["ctrl+c"])
+
+
+async def test_a_moment_that_looks_like_an_input_loop_is_not_waiting(term, monkeypatch):
+    # pytest's dots during a slow test: its epoll_wait, seen once with its
+    # thread between calls, read as an input loop, and run returned
+    # "waiting for input" at a row of dots, 12 s into a 19-minute run.
+    from docent_terminal_mcp import session as session_module
+    real, n = session_module.foreground_state, 0
+
+    async def flickering(tty, shell_pid=0):
+        nonlocal n
+        n += 1
+        state = await real(tty, shell_pid)
+        return "poll" if state == "busy" and n % 5 == 0 else state
+    monkeypatch.setattr(session_module, "foreground_state", flickering)
+    out = await term("run", session="s", timeout_s=6, input="printf '....'; sleep 30")
+    assert "waiting for input" not in out and "still running (6 s" in out, out
+    await term("send", session="s", keys=["ctrl+c"])
+
+
+async def test_a_job_printing_through_a_saved_copy_of_the_terminal_reaches_it(term):
+    # pytest's capture: fd 1 is an unlinked temporary file while a test runs,
+    # and the dots go to the terminal through a copy of the original fd 1.
+    # The reply said "nothing it prints reaches the terminal".
+    script = term.home / "capture.py"
+    script.write_text(
+        "import os, sys, tempfile, time\n"
+        "saved = os.dup(1)\n"
+        "capture = tempfile.TemporaryFile()\n"
+        "os.dup2(capture.fileno(), 1)\n"
+        "while True:\n"
+        "    os.write(saved, b'.'); time.sleep(0.5)\n")
+    out = await term("run", session="s", timeout_s=3, input=f"{sys.executable} {script}")
+    assert "still running" in out, out
+    assert "reaches the terminal" not in out and "goes to" not in out, out
     await term("send", session="s", keys=["ctrl+c"])
 
 
