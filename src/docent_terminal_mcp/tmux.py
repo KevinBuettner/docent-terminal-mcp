@@ -61,10 +61,19 @@ def expand_tabs(row: str, width: int) -> str:
     return "".join(out)
 
 
+def integration_variable(name: str, value: str) -> bool:
+    """Is this the integration of the shell the server was started from?
+    Each session brings its own; inherited, its PROMPT_COMMAND reached a
+    plain `bash --norc` without the functions it names (sh as dash drops
+    those) -- "__dtmcp_prompt: command not found" at every prompt."""
+    return (name.startswith("__DTMCP_") or name.startswith("BASH_FUNC___dtmcp_")
+            or (name == "PROMPT_COMMAND" and value.strip() == "__dtmcp_prompt"))
+
+
 def session_environ() -> dict[str, str]:
     """The environment tmux (and so every session) is given: this
     process's, without SERVER_ONLY_ENV and without the venv on PATH."""
-    env = {k: v for k, v in os.environ.items() if k not in SERVER_ONLY_ENV}
+    env = {k: v for k, v in os.environ.items() if k not in SERVER_ONLY_ENV and not integration_variable(k, v)}
     venv_bins = {os.path.dirname(sys.executable)}
     if venv := os.environ.get("VIRTUAL_ENV"):
         venv_bins.add(os.path.join(venv, "bin"))
@@ -322,7 +331,12 @@ class Tmux:
         # session_create with env PATH=/x/bin and command "psql" died with
         # "exec: psql: not found".  `env`
         # sets every variable again for the command itself.
-        assignments = [f"{k}={v}" for k, v in env.items()]
+        # And the variables a POSIX sh cannot hold: dash (Debian's sh) drops
+        # names like BASH_FUNC_module%% -- bash's exported functions -- on its
+        # way to the command.
+        unshellable = {k: v for k, v in session_environ().items()
+                       if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) and k not in env}
+        assignments = [f"{k}={v}" for k, v in {**unshellable, **env}.items()]
         return args + ["--", "sh", "-c", gate, "sh", *(["env", *assignments] if assignments else []), *argv]
 
     async def start_logging(self, pane_id: str, raw_log: Path, channel: str | None = None) -> None:
@@ -408,12 +422,12 @@ class Tmux:
 
     async def scrub_global_environment(self) -> None:
         """A tmux server started by an older server process may hold that
-        process's environment (its venv): clear it, so new sessions do not
-        inherit it."""
+        process's environment (its venv, its shell's integration): clear
+        it, so new sessions do not inherit it."""
         out = await self.run("show-environment", "-g", check=False)
         for line in out.splitlines():
             key, _, value = line.partition("=")
-            if key in SERVER_ONLY_ENV:
+            if key in SERVER_ONLY_ENV or integration_variable(key, value):
                 await self.run("set-environment", "-g", "-u", key, check=False)
             elif key == "PATH" and value != session_environ().get("PATH", value):
                 await self.run("set-environment", "-g", "PATH", session_environ()["PATH"], check=False)
@@ -563,10 +577,11 @@ NEUTRAL_WAITS = ("do_wait", "anon_pipe_read", "anon_pipe_write", "pipe_read", "p
 # the terminal is among what it waits for.
 _WAIT_SYSCALLS = {
     "x86_64": {7: "poll", 271: "poll", 23: "select", 270: "select", 232: "epoll", 281: "epoll", 441: "epoll",
-               0: "read", 17: "read", 19: "read", 45: "read", 47: "read"},  # read pread64 readv recvfrom recvmsg
+               0: "read", 17: "read", 19: "read", 45: "read", 47: "read", 275: "read"},  # read pread64 readv recvfrom recvmsg splice
     "aarch64": {73: "poll", 72: "select", 22: "epoll", 441: "epoll",
-                63: "read", 67: "read", 65: "read", 207: "read", 212: "read"},
+                63: "read", 67: "read", 65: "read", 207: "read", 212: "read", 76: "read"},
 }
+# (splice(fd_in, ...): uutils' cat, Ubuntu 26.04's, reads its input so.)
 # restart_syscall: an interrupted call resumed (gdb under gdb, after ctrl+c
 # and `continue`, still in its poll) -- the number says nothing of what it
 # waits in: no evidence either way.

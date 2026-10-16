@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from .guide import INDEX, INSTRUCTIONS, TOPICS
 from .names import NAME, SHORT
-from .session import ACTOR, DEFAULT_SETTLE_MS, UntilWatch, LOCAL_HOST, LOCAL_USER, MAX_LINE_CHARS, Place, Region, Rule, Session, clip_line, integration_line, place_of_processes, prompt_regex, short_host
+from .session import ACTOR, DEFAULT_SETTLE_MS, QUESTION_ENDS, UntilWatch, LOCAL_HOST, LOCAL_USER, MAX_LINE_CHARS, Place, Region, Rule, Session, clip_line, integration_line, place_of_processes, prompt_regex, short_host
 from . import retention, summary
 from .tmux import SHELLS, TMUX_CONFIG, is_carrier, process_chain, process_tree_summary, Process, Tmux, TmuxError, background_processes, foreground_processes, foreground_state, foreground_table, normalize_key
 
@@ -1971,7 +1971,6 @@ def question_hint(text: str) -> str | None:
     return yes_no_hint(text)
 
 
-QUESTION_ENDS = ("?", ":", ")", "]")  # how questions end ("(y or n)", "[Y/n]"); prompts end in > $ #
 DEFAULT_PROMPT = prompt_regex(None)
 
 SIGNALS = {name: getattr(signal_module, f"SIG{name}") for name in ("TERM", "KILL", "INT", "HUP", "QUIT")}
@@ -2508,10 +2507,10 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
             args["save_to"] = m["tee"]
         second_guess(
             s, "pipe_tail", line,
-            f"`| tail` lets only its {n} line{'s' if n != 1 else ''} reach the session: the log, the `read` and "
+            f"`| tail` lets only {'its last line' if n == 1 else f'its last {n} lines'} reach the session: the log, the `read` and "
             "`search` tools and a human watching never see the rest, and a reply already keeps the first and "
             "last lines of long output (a test run's FAIL lines and totals first).",
-            f"The same {n} lines in the reply, all of the output kept: {as_run(s, **args)}."
+            f"The same {'line' if n == 1 else f'{n} lines'} in the reply, all of the output kept: {as_run(s, **args)}."
             + ("  (save_to writes the file, as the tee would.)" if tee else ""))
     if save_to is None and (m := REDIRECT_END.match(line)) and (target := m["a"] or m["b"]) != "/dev/null" \
             and await s.where() is None:

@@ -1774,6 +1774,26 @@ async def test_connect_sends_the_first_call_after_a_restart(served):
                 new.wait(timeout=10)
 
 
+async def test_the_servers_own_shell_integration_stays_out_of_its_sessions(env, monkeypatch):
+    # A server started from an integrated shell (pytest in a session, on
+    # Ubuntu): its exported PROMPT_COMMAND reached `bash --norc`, but not
+    # the functions it names -- dash, as sh, drops BASH_FUNC_name%% on its
+    # way to the command -- and every prompt said "__dtmcp_prompt: command
+    # not found".  The user's own exported functions (`module`) must
+    # still get through.
+    home, socket = env
+    monkeypatch.setenv("PROMPT_COMMAND", "__dtmcp_prompt")
+    monkeypatch.setenv("BASH_FUNC___dtmcp_prompt%%", "() {  :\n}")
+    monkeypatch.setenv("__DTMCP_TTY", "/dev/pts/999")
+    monkeypatch.setenv("BASH_FUNC_userfn%%", "() {  echo user-function\n}")
+    t = Term(home, socket)
+    await t("session_create", name="p", command="bash --norc --noprofile", env={"HOME": plain_home(home)})
+    await t("run", session="p", input="true")
+    out = await t("run", session="p", timeout_s=10,
+                  input='echo "pc=[$PROMPT_COMMAND] tty=[$__DTMCP_TTY]"; userfn')
+    assert "pc=[] tty=[]" in out and "user-function" in out and "not found" not in out, out
+
+
 async def test_painting_ends_at_the_next_prompt_in_a_plain_shell(env):
     """A command that paints the screen (cursor addressing, as a pager or a
     status tree does) and exits without showing the cursor: in a shell
@@ -2328,6 +2348,19 @@ async def test_a_command_reading_without_a_prompt_is_waiting(term):
     # Silent but busy is not waiting.
     out = await term("run", session="s", input="sleep 3; echo slept", timeout_s=30)
     assert "exit 0" in out and out.splitlines()[-1] == "slept", out
+
+
+@needs("/proc syscall")
+async def test_a_program_splicing_from_the_terminal_is_waiting(term):
+    # Ubuntu 26.04's cat (uutils) reads its input with splice(0, ...), not
+    # read(): "cat" ran to its 30 s timeout, never "waiting for input".
+    code = "import os; r, w = os.pipe(); n = os.splice(0, w, 4096); print('spliced', n)"
+    t0 = asyncio.get_running_loop().time()
+    out = await term("run", session="s", input=f'{sys.executable} -c "{code}"', timeout_s=30)
+    assert asyncio.get_running_loop().time() - t0 < 6, out
+    assert "waiting for input (it is reading the terminal" in out, out
+    out = await term("run", session="s", input="hello")
+    assert "spliced 6" in out, out
 
 
 async def test_a_program_reading_without_a_prompt_in_a_plain_bash(env):
@@ -3461,6 +3494,31 @@ async def test_a_silent_command_on_another_host_is_not_waiting_for_input(env):
     code = "import select, sys; select.select([sys.stdin], [], [], 6); print('built')"
     out = await t("run", session="s", input=f'{sys.executable} -c "{code}"', timeout_s=15)
     assert "built" in out and "exit 0" in out and "waiting for input" not in out, out
+
+
+async def test_a_pause_mid_line_on_another_host_is_waiting_only_at_a_question(env):
+    # pytest -q over `docent-terminal-mcp ssh`: a slow test paused its line
+    # of dots, and run and wait both came back "waiting for input" at
+    # '........' within seconds of a 1500 s timeout.
+    home, socket = env
+    t = Term(home, socket)
+    bin_dir = Path(home) / "fakebin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text("#!/bin/bash\nenv -u PROMPT_COMMAND HOSTNAME=remote-fake PS1='remote-fake$ ' "
+                                 "bash --norc --noprofile -i\n")
+    (bin_dir / "ssh").chmod(0o755)
+    await t("session_create", name="s", env={"HOME": plain_home(home)})
+    install_integration(plain_home(home))
+    await t("run", session="s", input=f"{bin_dir}/ssh remote-fake", timeout_s=10)
+    await t("shell_integrate", session="s")
+    code = ("import select, sys; print('....', end='', flush=True); select.select([sys.stdin], [], [], 5); "
+            "print('.. passed')")
+    out = await t("run", session="s", input=f'{sys.executable} -c "{code}"', timeout_s=15)
+    assert "passed" in out and "exit 0" in out and "waiting for input" not in out, out
+    out = await t("run", session="s", input="read -p 'Continue? [y/N] ' a; echo got=$a", timeout_s=15)
+    assert "waiting for input" in out, out
+    out = await t("run", session="s", input="y", timeout_s=10)
+    assert "got=y" in out, out
 
 
 async def test_a_command_running_over_ssh_is_not_typed_ahead_into(env):

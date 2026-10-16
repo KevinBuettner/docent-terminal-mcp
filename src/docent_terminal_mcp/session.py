@@ -263,6 +263,7 @@ PROMPT_QUIET_S = 0.3
 DEBUG_TAIL_ROWS = 40  # how far up a prompt followed by a program's debug lines is looked for
 DEBUG_LINE = re.compile(r"^\s*\[[a-z][\w -]*\] ")  # gdb's "set debug" output: "[infrun] ...", "  [remote] ..."
 PARTIAL_LINE_QUIET_S = 1.5
+QUESTION_ENDS = ("?", ":", ")", "]")  # how questions end ("(y or n)", "[Y/n]"); prompts end in > $ #
 FOREGROUND_STABLE_S = 1.0  # at the start of a line, "waiting for input" needs a state this old
 EXPECT_OVERLAP_ROWS = 50
 MULTILINE_QUIET_S = 2.0
@@ -1597,7 +1598,15 @@ class Session:
             return False
         if self.foreground == "read":
             return True
-        return bool(self.prompt_here(pattern)) or quiet >= PARTIAL_LINE_QUIET_S
+        if self.prompt_here(pattern):
+            return True
+        # A command running on another host: the processes seen here are
+        # the ssh that carries it, so a pause mid-line is all there is to
+        # go by -- and a test run's dots or a build's "checking x..." pause
+        # too.  There, only a line shaped like a question counts.
+        if self.remote_command() is not None and not self.term.cursor_text().rstrip().endswith(QUESTION_ENDS):
+            return False
+        return quiet >= PARTIAL_LINE_QUIET_S
 
     async def run_shell_command(
         self, line: str, pattern: re.Pattern, timeout_s: float, until: re.Pattern | None = None,
