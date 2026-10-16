@@ -3660,6 +3660,35 @@ async def test_session_create_zsh_is_integrated(env):
     assert "exit 1" in out, out
 
 
+def ubuntu_global_compinit() -> bool:
+    """Does /etc/zsh/zshrc run compinit here (Ubuntu's, unless skipped)?"""
+    try:
+        return ("skip_global_compinit" in Path("/etc/zsh/zshrc").read_text()
+                and re.search(r"^ID.*=.*ubuntu", Path("/etc/os-release").read_text(), re.M) is not None)
+    except OSError:
+        return False
+
+
+@needs("zsh")
+@pytest.mark.skipif(not ubuntu_global_compinit(), reason="needs Ubuntu's /etc/zsh/zshrc (its compinit)")
+async def test_ubuntus_compinit_dumps_in_the_users_home_not_the_package(env):
+    # /etc/zsh/zshrc's compinit wrote $ZDOTDIR/.zcompdump -- with ZDOTDIR
+    # the package's shell/zsh, an untracked file in the checkout.
+    from docent_terminal_mcp.remote import SHELL_DIR
+    dump = SHELL_DIR / "zsh" / ".zcompdump"
+    dump.unlink(missing_ok=True)
+    home, socket = env
+    t = Term(home, socket)
+    h = Path(home) / "zhome"
+    h.mkdir()
+    (h / ".zshrc").write_text("PS1='%n@%m %# '\n")
+    await t("session_create", name="z", command="zsh", env={"HOME": str(h)})
+    out = await t("run", session="z", timeout_s=10,
+                  input="print -r -- compdef=$+functions[compdef] skip=${skip_global_compinit-unset}")
+    assert out.splitlines()[-1] == "compdef=1 skip=unset", out
+    assert (h / ".zcompdump").exists() and not dump.exists()
+
+
 @needs("gdb")
 async def test_a_gdb_piped_to_tail_is_diagnosed_at_once(term):
     # tail blocked on the pipe made the job "busy": the note for a gdb

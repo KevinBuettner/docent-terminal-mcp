@@ -1,6 +1,11 @@
 # docent-terminal-mcp's ZDOTDIR for integrated zsh sessions: read the user's own
 # .zshrc (from their ZDOTDIR, or HOME) as zsh would, with ZDOTDIR set to
 # theirs while it runs, so paths built from it (HISTFILE, plugins) are theirs.
+if [[ -n ${__dtmcp_compinit-} ]]; then  # Ubuntu's global compinit (see .zshenv)
+    unset __dtmcp_compinit skip_global_compinit
+    autoload -U compinit
+    compinit -d ${__DTMCP_USER_ZDOTDIR:-$HOME}/.zcompdump
+fi
 () {
     local ours=$ZDOTDIR
     ZDOTDIR=${__DTMCP_USER_ZDOTDIR:-$HOME}
