@@ -1104,8 +1104,11 @@ def describe(session: Session, region: Region) -> str:
     bits = [f"region {s['id']}"]
     if region.command:
         first, *more = region.command.split("\n")
-        # A program's input keeps its end (the input), a command its start.
-        cmd = first if len(first) <= 80 else ("..." + first[-77:] if region.kind == "input" else first[:77] + "...")
+        # A program's input keeps its end (the input, after the program's
+        # prompt), a command its start -- a plain shell's too, its prompt
+        # already cut to its sign ("$ make", Session.short_shell_label).
+        tail = region.kind == "input" and not re.match(r"[$#%>] ", first)
+        cmd = first if len(first) <= 80 else ("..." + first[-77:] if tail else first[:77] + "...")
         if more:
             cmd += f" (+{len(more)} line{'s' if len(more) > 1 else ''})"
         bits.append(f"$ {cmd}" if region.kind == "command" else cmd)

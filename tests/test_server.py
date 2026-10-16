@@ -1794,6 +1794,18 @@ async def test_the_servers_own_shell_integration_stays_out_of_its_sessions(env, 
     assert "pc=[] tty=[]" in out and "user-function" in out and "not found" not in out, out
 
 
+async def test_a_long_command_in_a_plain_shell_is_labelled_by_its_start(env):
+    # "region 5 · ...e mcp add -s user terminal -- ...; cd": a plain shell's
+    # line kept its end, as a program's input does after its prompt.
+    home, socket = env
+    t = Term(home, socket)
+    await t("session_create", name="p", command="bash --norc --noprofile", env={"HOME": plain_home(home)})
+    await t("run", session="p", input="true")
+    line = "echo start-of-it && echo " + "x" * 80 + "; true"
+    out = await t("run", session="p", input=line, timeout_s=10)
+    assert "· $ echo start-of-it && echo xxx" in out.splitlines()[0], out
+
+
 async def test_painting_ends_at_the_next_prompt_in_a_plain_shell(env):
     """A command that paints the screen (cursor addressing, as a pager or a
     status tree does) and exits without showing the cursor: in a shell
