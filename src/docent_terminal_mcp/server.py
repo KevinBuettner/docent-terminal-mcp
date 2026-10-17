@@ -73,6 +73,8 @@ EXPECT_OUTCOMES = {
 
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}$")  # "+": panes of a window, "gdb+1"
+NAME_CHAR = re.compile(r"[A-Za-z0-9_.+-]")
+LIVE_LISTED = 12  # an unknown session's error lists the live ones up to this many, else only the caller's
 BASHRC = Path(__file__).parent / "shell" / "bashrc"
 ZSH_DIR = Path(__file__).parent / "shell" / "zsh"
 
@@ -115,6 +117,14 @@ class Manager:
                 continue
             index[d.name] = (meta.get("pane_id"), meta.get("window") or d.name, meta.get("tmux_pid"))
         return index
+
+    def _started_by(self, name: str) -> str | None:
+        if (s := self.sessions.get(name)) is not None:
+            return s.meta.get("started_by")
+        try:
+            return json.loads((self.sessions_dir / name / "meta.json").read_text()).get("started_by")
+        except (OSError, ValueError):
+            return None
 
     def _record_pane(self, name: str, pane_id: str, window: str, tmux_pid: int | None) -> None:
         """Note a session's pane in its meta.json and the index."""
@@ -519,7 +529,31 @@ class Manager:
                 raise ToolError(f"no session named {name!r} any more: {retention.gone_text(gone)}")
             await self.sync_panes()
             live = sorted([n for n in list(self.tmux.panes) if await self.tmux.has_session(n)])
-            which = f"the live sessions are {', '.join(live)}" if live else "there are no live sessions"
+            if not live:
+                which = "there are no live sessions"
+            elif len(live) <= LIVE_LISTED:
+                which = f"the live sessions are {', '.join(live)}"
+            else:
+                mine = [n for n in live if self._started_by(n) == ACTOR.get()]
+                which = (f"of the {len(live)} live sessions, yours are {', '.join(mine)}" if mine else
+                         f"none of the {len(live)} live sessions is yours") + " (session_list lists them all)"
+            if name.isdigit():
+                raise ToolError(
+                    f"no session named {name!r}: a number like that is a process's ID in another tool (a shell "
+                    f"tool's session ID, a PID), not a session here, and nothing here reaches that process: go on "
+                    f"with the tool that started it, or start the program here (session_create, then run); {which}")
+            # A live name with debris after it that no name has (qwen: 'tests\n</parameterparameter>').
+            if near := [n for n in live if name.startswith(n) and not NAME_RE.fullmatch(name[:len(n) + 1])]:
+                raise ToolError(f"no session named {name!r} -- did you mean {near[0]!r}? (what follows it cannot "
+                                f"be part of a session's name)")
+            # ... or before it (qwen under codex: '=build').
+            if near := [n for n in live if name.endswith(n) and len(name) > len(n)
+                        and not NAME_CHAR.match(name[-len(n) - 1])]:
+                raise ToolError(f"no session named {name!r} -- did you mean {near[0]!r}? (what comes before it "
+                                f"cannot be part of a session's name)")
+            # A slip of the keys (qwen: 'gdbgdb' for 'gdbdbg'); the live ones are still named.
+            if near := difflib.get_close_matches(name, live, 1, 0.8):
+                raise ToolError(f"no session named {name!r} -- did you mean {near[0]!r}? {which}")
             raise ToolError(f"no session named {name!r}: {which} (session_create makes one)")
         if self.index is None or name not in self.index:
             self.index = self._read_index()
@@ -2376,8 +2410,9 @@ GUESS_NOTES = {"pipe_tail": "pipe_tail", "redirect": "redirect_log", "background
 # `| tail [-n] N` ending the line, after an optional `| tee FILE`.
 TAIL_END = re.compile(r"^(?P<cmd>.*?\S)(?:\s*\|\s*tee\s+(?P<tee>[^\s|;&<>-][^\s|;&<>]*))?"
                       r"\s*\|\s*tail(?:\s+(?:-n\s*|-)(?P<n>\d+))?\s*$")
-# `> FILE 2>&1` or `&> FILE` ending the line (not >>: save_to rewrites the file).
-REDIRECT_END = re.compile(r"^(?P<cmd>.*?\S)\s*(?:(?<![<>&\d])>\s*(?P<a>[^\s;|&<>]+)\s+2>&1|(?<!&)&>\s*(?P<b>[^\s;|&<>]+))\s*$")
+# `> FILE 2>&1` or `&> FILE` ending the line (not >>: save_to rewrites the file),
+# a `;` after it too (an eval's `gdb ... -ex q > /tmp/sysgdb.txt 2>&1;` ran unasked).
+REDIRECT_END = re.compile(r"^(?P<cmd>.*?\S)\s*(?:(?<![<>&\d])>\s*(?P<a>[^\s;|&<>]+)\s+2>&1|(?<!&)&>\s*(?P<b>[^\s;|&<>]+))\s*;?\s*$")
 BACKGROUND_END = re.compile(r"(?<![&|>])&\s*$")
 # `sleep N; cat log`: polling for something to happen.
 SLEEP_POLL = re.compile(r"^\s*sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)\s*(?:;|&&)\s*(?P<rest>\S.*)$")
@@ -2926,6 +2961,17 @@ class Actors:
         return unique
 
 
+# Arguments of the shell tools models know best (codex's exec_command and
+# write_stdin), carried over to ours: what they are here.
+OTHER_TOOLS_ARGUMENTS = {
+    "yield_time_ms": [("timeout_s", ", in seconds")],
+    "max_output_tokens": [("max_lines", "")],
+    "workdir": [("cwd", "")],
+    "session_id": [("session", ", a name")],
+    "chars": [("text", ""), ("input", "")],
+}
+
+
 def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
     """The refusal of a call with arguments the tool does not have."""
     def abbreviates(k: str, n: str) -> bool:  # "cmd" for "command", not "cwd"
@@ -2933,6 +2979,10 @@ def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
         return k[:1] == n[:1] and all(c in letters for c in k)
 
     def guess(k: str) -> str:
+        if alias := next(((n, unit) for n, unit in OTHER_TOOLS_ARGUMENTS.get(k, ()) if n in known), None):
+            return f"{k!r} (another shell tool's argument: here {alias[0]}{alias[1]})"
+        if k == "workdir" and "cwd" not in known:
+            return f"{k!r} (a session keeps its directory: `cd` there, or session_create cwd=)"
         near = ([n for n in known if abbreviates(k, n) or k.startswith(n)]
                 or difflib.get_close_matches(k, known, 1))
         return f"{k!r} (did you mean {near[0]!r}?)" if near else repr(k)
@@ -2953,6 +3003,9 @@ class Server(MCPServer):
             known = list(tool.parameters.get("properties", {}))
             if unknown := [k for k in arguments if k not in known]:
                 raise ToolError(unknown_arguments(name, unknown, known))
+        # A session's name with blanks around it is that name: qwen sent session="\nvim-ini".
+        arguments = {k: v.strip() if k in ("session", "name") and isinstance(v, str) else v
+                     for k, v in arguments.items()}
         return await super().call_tool(name, arguments, context)
 
 
@@ -3738,7 +3791,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             start = (s.term.row, 0)
             # Rows above the cursor a program may rewrite in place (an inline
             # menu, a dialog drawn with cursor-up): shown again if changed.
-            paintings = s.term.paintings
+            paintings, was_full = s.term.paintings, s.term.full_screen
             above = range(max(0, s.term.row - REWRITE_ROWS), s.term.row)
             before_rows = [s.term.line(r) for r in above]
             open_ids = {r.id for r in s.regions if not r.done} | s.open_at_reply
@@ -3790,9 +3843,12 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             finished = [describe(s, r) for r in ended]
             # (After the caller's own ctrl+c no note is needed.)
             interrupted = [] if interrupt else await interrupt_notes(s, ended)
-            if s.term.full_screen or s.term.paintings > paintings:
+            if s.term.full_screen or s.term.paintings > paintings or (was_full and not finished and not s.at_shell_prompt):
                 # (Painted and ended within the call -- a popup, cursor shown
-                # again: the screen, not the text, shows it.)
+                # again: the screen, not the text, shows it.  So too a program
+                # that painted without the alternate screen and shows the
+                # cursor for a prompt of its own: top's `O` asks "add filter
+                # #1" on its screen, and the reply said "no new output".)
                 out = await render_screen(mgr.tmux, s, mode=screen, max_rows=max_lines)
             else:
                 changed = [r for r, old in zip(above, before_rows)
@@ -3877,9 +3933,19 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                                   + pipe_notes(s, since, show_rx, last_lines)
                                   + await interrupt_notes(s, since))
             if region is None:
+                # No command region: a session whose program is not a shell
+                # (session_create command="python3 crawl.py"), or a shell at
+                # its prompt.  `until` still ends the wait: it sat out its whole
+                # timeout_s while the program printed the pattern.
                 start = (s.term.row, 0)
-                why = await s.wait(lambda: False, timeout_s, settle_s=DEFAULT_SETTLE_MS / 1000)
-                out = f"[no command running; {why}]\n" + s.clip_span(start, s.content_end(), max_lines, "the `read` tool shows more")
+                watch = UntilWatch(s, until_rx)
+                why = await s.wait(lambda: watch(start), timeout_s,
+                                   settle_s=None if until_rx else DEFAULT_SETTLE_MS / 1000)
+                head = ("[`until` matched; what runs in the session goes on running]" if watch.hit
+                        else f"[no command running; {why}]")
+                out = head + "\n" + s.clip_span(start, s.content_end(), max_lines, "the `read` tool shows more")
+                if watch.hit:
+                    return out
                 info = await mgr.tmux.pane_info(session)
                 if jobs := await background_processes(info.tty, info.pid):
                     out += (f"\n[no command in the foreground, but in the background: {named(jobs)} -- started with "

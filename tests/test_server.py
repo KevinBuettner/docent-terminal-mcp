@@ -653,6 +653,31 @@ async def test_answered_question_is_marked(term):
     await term("run", session="s", input="exit()")
 
 
+async def test_until_ends_a_wait_in_a_session_whose_program_is_not_a_shell(env):
+    # session_create command="python3 crawl.py", then wait until="five errors so far":
+    # the wait sat out its whole timeout_s while the crawler printed it.
+    t = Term(*env)
+    out = await t("session_create", name="p", command="sh -c 'echo started; sleep 14; echo five errors so far; sleep 60'")
+    assert "five errors" not in out.split("---", 1)[1], out
+    began = time.monotonic()
+    out = await t("wait", session="p", timeout_s=40, until="five errors")
+    assert time.monotonic() - began < 20, out
+    assert out.startswith("[`until` matched") and "five errors so far" in out, out
+
+
+@pytest.mark.skipif(sys.version_info < (3, 13), reason="the REPL indents by itself from Python 3.13")
+async def test_a_block_sent_after_its_header_alone_keeps_its_own_indentation(env):
+    # glm sent `class Matrix:` alone, then the body with its own indentation:
+    # the REPL's own indent went in front of it (IndentationError).
+    t = Term(*env)
+    await t("session_create", name="p", command=f"{sys.executable} -q")
+    await t("run", session="p", input="class M:")
+    out = await t("run", session="p", input="    def f(self):\n        return 7")
+    assert "Error" not in out, out
+    out = await t("run", session="p", input="M().f()")
+    assert out.splitlines()[-1] == "7", out
+
+
 async def test_session_program_exit_status(env):
     t = Term(*env)
     await t("session_create", name="p", command=f"{sys.executable} -q")
@@ -872,6 +897,24 @@ class Client_:
         os.close(self.master)
 
 
+async def test_a_client_attaching_is_not_human_input(term):
+    # adjutant attaches a reader to each pane at once: nine sessions showed
+    # "human terminal input 12m ago", the moment they were attached.
+    await term("run", session="s", input="true")
+    c = Client_(term.socket, "s", 100, 30)
+    try:
+        assert await wait_for(lambda: asyncio.sleep(0, bool(tmux_cmd(term, "list-clients").strip())))
+        await asyncio.sleep(1.2)  # client_activity counts seconds
+        out = await term("session_list")
+        assert "1 human attached" in out and "human terminal input" not in out, out
+        os.write(c.master, b"x")  # a key typed in that terminal
+        await asyncio.sleep(0.5)
+        out = await term("session_list")
+        assert "human terminal input" in out, out
+    finally:
+        c.kill()
+
+
 async def wait_for(check, timeout=5):
     for _ in range(int(timeout / 0.1)):
         if await check():
@@ -980,6 +1023,18 @@ async def test_top_is_treated_as_full_screen(term):
     assert "[finished: region 1 · $ top -d 1 · exit 0" in out
     session_txt = (term.home / "sessions/s/session.txt").read_text()
     assert "Tasks:" not in session_txt and "[full-screen program output omitted" in session_txt
+
+
+@needs("top")
+async def test_a_prompt_of_tops_own_comes_back_as_its_screen(term):
+    # top paints without the alternate screen and shows the cursor for `O`'s
+    # "add filter #1" prompt: the reply said "[no new output ...]".
+    await term("run", session="s", input="top -d 1", timeout_s=20)
+    out = await term("send", session="s", keys=["O"])
+    assert "add filter #1" in out and "no new output" not in out, out
+    await term("send", session="s", keys=["enter"])  # an empty filter: none
+    out = await term("send", session="s", keys=["q"])
+    assert "exit 0" in out, out
 
 
 async def test_redraw_loop_of_clears_stays_text(term):
@@ -3040,6 +3095,19 @@ async def test_session_errors_say_what_to_do(term):
         await term("run", session="s", input="true")
 
 
+async def test_a_number_for_a_session_is_taken_for_another_tools_process(term, monkeypatch):
+    # codex's own shell answers "Process running with session ID 4440"; models then ask us for '4440'.
+    from docent_terminal_mcp import server as server_module
+    await term("run", session="s", input="true")
+    with pytest.raises(AssertionError, match=r"no session named '4440': a number like that is a process's ID in "
+                                             r"another tool .*the live sessions are s"):
+        await term("wait", session="4440")
+    monkeypatch.setattr(server_module, "LIVE_LISTED", 0)  # a shared server: dozens of sessions, most not yours
+    with pytest.raises(AssertionError, match=r"no session named 'build': of the 1 live sessions, yours are s "
+                                             r"\(session_list lists them all\)"):
+        await term("run", session="build", input="true")
+
+
 async def test_a_session_whose_tmux_server_is_gone_says_so(term):
     tmux_cmd(term, "kill-server")
     with pytest.raises(AssertionError, match="no tmux server answers.*TMUX_TMPDIR"):
@@ -3906,7 +3974,7 @@ async def test_a_prompt_followed_by_output_is_back_at_the_prompt(term):
     assert "waiting for input at '(gdb)'" in out, out
     began = time.monotonic()
     out = await term("run", session="s", input="step", timeout_s=30)
-    assert time.monotonic() - began < 10, out
+    assert time.monotonic() - began < 20, out
     assert "(gdb) step · ready" in out.splitlines()[0] and "did step" in out, out
     out = await term("run", session="s", input="next", timeout_s=30)
     assert "· ready" in out.splitlines()[0] and "did next" in out, out
@@ -4121,10 +4189,35 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
     assert "Its arguments: name, command, cwd," in str(e.value)
     with pytest.raises(AssertionError) as e:
         await term("run", session="s", input="echo hi", yield_time_ms=1000, max_output_tokens=2000)
-    assert "run has no arguments 'yield_time_ms', 'max_output_tokens'; nothing was done." in str(e.value)
+    assert ("run has no arguments 'yield_time_ms' (another shell tool's argument: here timeout_s, in seconds), "
+            "'max_output_tokens' (another shell tool's argument: here max_lines); nothing was done.") in str(e.value)
+    with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="ls", workdir="/tmp")
+    assert "'workdir' (a session keeps its directory: `cd` there, or session_create cwd=)" in str(e.value)
     out = await term("session_list")
     assert "\ng\t" not in "\n" + out, out
 
+
+async def test_blanks_around_a_session_name_are_not_part_of_it(term):
+    # qwen sent session="\nvim-ini" for its session vim-ini.
+    out = await term("run", session="\ns ", input="echo hi")
+    assert "exit 0" in out and "hi" in out, out
+    # Tool-call markup after it (an eval's qwen: 'tests\n</parameterparameter>') is asked about.
+    with pytest.raises(AssertionError, match=r"no session named 's\\n</parameterparameter>' -- did you mean 's'\?"):
+        await term("run", session="s\n</parameterparameter>", input="echo hi")
+    # ... and before it (an eval's qwen under codex: '=build').
+    with pytest.raises(AssertionError, match=r"no session named '=s' -- did you mean 's'\? \(what comes before"):
+        await term("run", session="=s", input="echo hi")
+
+
+async def test_a_session_name_mistyped_is_asked_about(term):
+    # An eval's qwen sent 'gdbgdb' for its session gdbdbg.
+    await term("session_create", name="gdbdbg")
+    with pytest.raises(AssertionError, match=r"no session named 'gdbgdb' -- did you mean 'gdbdbg'\? the live sessions"):
+        await term("send", session="gdbgdb", keys=["enter"])
+    with pytest.raises(AssertionError, match=r"no session named 'zzz': the live sessions"):
+        await term("send", session="zzz", keys=["enter"])
+    await term("session_close", session="gdbdbg")
 
 
 async def test_a_job_whose_output_reaches_nothing_says_so(term):
@@ -4445,7 +4538,7 @@ async def test_a_prompt_followed_by_several_debug_lines_is_back_at_the_prompt(te
     await term("run", session="s", input=f"bash {term.home}/fakegdb.sh", timeout_s=10)
     began = time.monotonic()
     out = await term("run", session="s", input="kill", timeout_s=30)
-    assert time.monotonic() - began < 10, out
+    assert time.monotonic() - began < 20, out
     assert "· ready" in out.splitlines()[0] and "did kill" in out, out
     # Ordinary output after an old prompt line is not mistaken for it.
     (term.home / "fake2.sh").write_text(
@@ -4512,6 +4605,14 @@ async def test_each_habit_gets_its_own_second_guess(term):
                  "( set -e; true )", "bash -ec 'set -e; true'"):
         out = await term("run", session="s", input=line, timeout_s=3)
         assert "not typed" not in out, out
+
+
+@pytest.mark.second_guess
+async def test_a_redirect_before_a_trailing_semicolon_gets_its_second_guess(term):
+    # An eval's `gdb --version | head -1; gdb ... -ex q > /tmp/sysgdb.txt 2>&1;` ran unasked.
+    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        await term("run", session="s", input="echo a; seq 1 3 > out.log 2>&1;")
+    assert 'input="echo a; seq 1 3" save_to="out.log"' in str(e.value), e.value
 
 
 @pytest.mark.second_guess

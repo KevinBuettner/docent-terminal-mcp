@@ -221,6 +221,8 @@ DEFAULT_PROMPT_RE = re.compile(DEFAULT_PROMPT_PATTERN)
 PY_MAIN = re.compile(r"^(?:\^C)*(>>>|In \[\d+\]:)")  # Python's (or IPython's) main prompt
 PY_CONT = re.compile(r"(\.\.\.|\.\.\.:)$")  # and its continuation prompt, at the end of a line
 PY_AT_END = re.compile(r"(>>>|\.\.\.|In \[\d+\]:|\.\.\.:)$")  # either, output before it or not
+# Python 3.13+'s REPL at its continuation prompt, the line already indented by itself (after a ":").
+PY_AUTO_INDENTED = re.compile(r"^\.\.\.  +$")
 # Once a program has shown a prompt of one kind, only that family counts as
 # its prompt: after "(gdb) " or ">>> ", a progress line ending in "> " or
 # "$ " is output, not a prompt.  A bare "> " continuation goes with gdb's
@@ -2145,7 +2147,14 @@ class Session:
         with a newline, and Enter on the empty line after it runs the block.
         (Other programs, gdb among them, also ask for bracketed paste but
         take typed lines as separate commands, which is what is wanted.)
+
+        Text that brings its own indentation, sent where the REPL has
+        indented the line already (after `class Matrix:` sent alone), gets
+        that indentation cleared first: added to the text's own, it made
+        `def` deeper than its body (IndentationError).
         """
+        if text[:1] in (" ", "\t") and PY_AUTO_INDENTED.match(self.term.cursor_text()):
+            await self.tmux.send_keys(self.name, ["C-a", "C-k"])
         if self.will_paste(text):
             before = self.offset
             await self.tmux.paste(self.name, text + "\n")

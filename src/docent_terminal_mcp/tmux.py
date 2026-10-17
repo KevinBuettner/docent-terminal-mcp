@@ -22,6 +22,20 @@ from pathlib import Path
 log = logging.getLogger("docent_terminal_mcp")
 
 
+# A client's last input: tmux sets client_activity when the client attaches,
+# so a time no later than that is no input at all.  (adjutant attaches a
+# control-mode reader to each pane at once: nine sessions all showed "human
+# terminal input 12m ago", the moment it attached.)
+CLIENT_INPUT = "#{client_activity} #{client_created}"
+
+
+def client_input(times: str) -> int | None:
+    activity, _, created = times.strip().partition(" ")
+    if not activity.isdigit() or (created.isdigit() and int(activity) <= int(created)):
+        return None
+    return int(activity)
+
+
 class TmuxError(Exception):
     pass
 
@@ -410,13 +424,13 @@ class Tmux:
     async def client_table(self) -> dict[str, tuple[int, int | None]]:
         """Per tmux session (a window here): how many clients are attached,
         and the epoch seconds of their latest input."""
-        out = await self.run("list-clients", "-F", "#{session_name}\t#{client_activity}", check=False)
+        out = await self.run("list-clients", "-F", "#{session_name}\t" + CLIENT_INPUT, check=False)
         table: dict[str, tuple[int, int | None]] = {}
         for line in out.splitlines():
-            window, _, activity = line.partition("\t")
+            window, _, times = line.partition("\t")
             n, last = table.get(window, (0, None))
-            if activity.isdigit() and (last is None or int(activity) > last):
-                last = int(activity)
+            if (t := client_input(times)) is not None and (last is None or t > last):
+                last = t
             table[window] = (n + 1, last)
         return table
 
@@ -513,8 +527,8 @@ class Tmux:
 
     async def last_client_activity(self, name: str) -> float | None:
         """Epoch seconds of the most recent input from any attached client."""
-        out = await self.run("list-clients", "-t", self.wtarget(name), "-F", "#{client_activity}", check=False)
-        times = [int(t) for t in out.split() if t.isdigit()]
+        out = await self.run("list-clients", "-t", self.wtarget(name), "-F", CLIENT_INPUT, check=False)
+        times = [t for line in out.splitlines() if (t := client_input(line)) is not None]
         return max(times) if times else None
 
     async def set_size(self, name: str, cols: int | None, rows: int | None, fixed: bool) -> None:
