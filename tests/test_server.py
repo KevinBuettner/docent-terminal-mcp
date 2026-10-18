@@ -4194,6 +4194,14 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
     with pytest.raises(AssertionError) as e:
         await term("run", session="s", input="ls", workdir="/tmp")
     assert "'workdir' (a session keeps its directory: `cd` there, or session_create cwd=)" in str(e.value)
+    # run's and send's arguments mixed up (an eval's Claude Code x Qwen:
+    # send input="q", and the list of send's arguments was not enough).
+    with pytest.raises(AssertionError) as e:
+        await term("send", session="s", input="q")
+    assert "send has no argument 'input' (that is `run`'s: here text=, typed with no Enter" in str(e.value)
+    with pytest.raises(AssertionError) as e:
+        await term("run", session="s", text="ls")
+    assert "run has no argument 'text' (that is `send`'s: here input=" in str(e.value)
     out = await term("session_list")
     assert "\ng\t" not in "\n" + out, out
 
@@ -4208,6 +4216,26 @@ async def test_blanks_around_a_session_name_are_not_part_of_it(term):
     # ... and before it (an eval's qwen under codex: '=build').
     with pytest.raises(AssertionError, match=r"no session named '=s' -- did you mean 's'\? \(what comes before"):
         await term("run", session="=s", input="echo hi")
+
+
+async def test_interrupt_ends_the_command_holding_the_session_then_types_the_line(term):
+    # adjutant's glm: a `tail -f` held the session, and the busy refusal's
+    # remedy (send ctrl+c, run again) took three calls -- three approval
+    # cards in ask-first mode.
+    await term("run", session="s", input="tail -f /dev/null", timeout_s=1)
+    with pytest.raises(AssertionError, match="interrupt=true interrupts it and then types the line"):
+        await term("run", session="s", input="echo hi")
+    out = await term("run", session="s", input="echo hi", interrupt=True)
+    assert "[interrupted with ctrl+c: region" in out and "tail -f /dev/null" in out and "130" in out, out
+    assert out.endswith("\nhi") and "exit 0" in out and out.count("tail -f") == 1, out
+    # Nothing holds the session: nothing is interrupted.
+    out = await term("run", session="s", input="echo again", interrupt=True)
+    assert "interrupted" not in out and "again" in out, out
+    # A job that ignores ctrl+c: nothing is typed.
+    await term("run", session="s", input="sh -c 'trap \"\" INT; sleep 30'", timeout_s=1)
+    with pytest.raises(AssertionError, match="no prompt came back within 5 s .*so nothing was typed"):
+        await term("run", session="s", input="echo never", interrupt=True)
+    await term("send", session="s", signal="TERM")
 
 
 async def test_a_session_name_mistyped_is_asked_about(term):

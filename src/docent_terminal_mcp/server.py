@@ -1031,25 +1031,62 @@ async def refuse_if_exited(s: Session) -> None:
                         f"starts a new one")
 
 
+async def busy_command(s: Session, pattern: re.Pattern) -> Region | None:
+    """The shell command that is running, busy, and not asking anything,
+    if there is one."""
+    command = s.open_command
+    if command is None or s.term.full_screen or s.prompt_here(pattern):
+        return None
+    remote = s.remote_command()
+    if remote is not None and s.term.col == 0:
+        # Its shell's markers say it is still running over there, and nothing
+        # on the line asks anything: the local ssh looks idle, the command
+        # is not.
+        return remote
+    info = await s.tmux.pane_info(s.name)
+    return command if await foreground_state(info.tty, info.pid if s.integrated else 0) == "busy" else None
+
+
+INTERRUPT_WAIT_S = 5
+
+
+async def interrupt_first(s: Session, pattern: re.Pattern) -> str:
+    """run's interrupt=true: a busy command holding the session gets a
+    ctrl+c, and the line is typed once a prompt is back.  One call where
+    the busy refusal's remedy took three -- each an approval card for a
+    user in ask-first mode (adjutant's glm, a `tail -f`)."""
+    command = await busy_command(s, pattern)
+    if command is None:
+        return ""
+    open_ids = {r.id for r in s.regions if not r.done}
+    before = await foreground_jobs(s)
+    s.note_sent()
+    await s.tmux.send_keys(s.name, ["C-c"])
+    await s.wait(lambda: s.at_shell_prompt or bool(s.prompt_here(pattern)), INTERRUPT_WAIT_S)
+    s.note_model_input()
+    s.close_stale_input(interrupted=True)
+    ended_regions = [r for r in s.regions if r.id in open_ids and r.done]
+    s.open_at_reply = s.open_at_reply - {r.id for r in ended_regions}  # reported here, not again at the end
+    ended = [describe(s, r) for r in ended_regions]
+    if not (s.at_shell_prompt or s.prompt_here(pattern)):
+        stuck = await foreground_jobs(s)
+        who = named([p for p in stuck if p.pid in {b.pid for b in before}] or stuck) if stuck else "it"
+        raise ToolError(f"ctrl+c sent to region {command.id} ($ {(command.command or '')[:60]}), but no prompt "
+                        f"came back within {INTERRUPT_WAIT_S} s ({who} still in the foreground), so nothing was "
+                        f"typed.  `wait` waits for it; `send` signal=\"TERM\" ends a job that ignores ctrl+c")
+    return "".join(f"[interrupted with ctrl+c: {d[1:]}\n" for d in ended) or \
+        f"[interrupted with ctrl+c: region {command.id}]\n"
+
+
 async def refuse_type_ahead(s: Session, pattern: re.Pattern, line: str = "") -> None:
     """A shell command is running, busy, and not asking anything: a line
     typed now would be read by it, or run by the shell after it finishes,
     unreported.  Refuse (force=true types ahead anyway), and offer the
     line as a `send`: right when the program reads keys itself (a TUI that
     paints in place was not seen as one)."""
-    command = s.open_command
-    if command is None or s.term.full_screen or s.prompt_here(pattern):
+    command = await busy_command(s, pattern)
+    if command is None:
         return
-    remote = s.remote_command()
-    if remote is not None and s.term.col == 0:
-        # Its shell's markers say it is still running over there, and nothing
-        # on the line asks anything: the local ssh looks idle, the command
-        # is not.
-        command = remote
-    else:
-        info = await s.tmux.pane_info(s.name)
-        if await foreground_state(info.tty, info.pid if s.integrated else 0) != "busy":
-            return
     as_send = ""
     if line and "\n" not in line and len(line) <= 200:
         as_send = (f"  Only if that program reads keys itself (a TUI, an editor) and the line is meant for "
@@ -1060,7 +1097,8 @@ async def refuse_type_ahead(s: Session, pattern: re.Pattern, line: str = "") -> 
         f"region {command.id} ($ {(command.command or '')[:60]}) is still running and not waiting for input, "
         "so this session is busy: a line typed now would be read by it, or run by the shell after it ends, with "
         "no reply for it.  To run something else now, use another session (session_create, or session_split "
-        "beside this one); the `wait` tool waits for this command; `send` keys=['ctrl+c'] interrupts it."
+        "beside this one); the `wait` tool waits for this command; `send` keys=['ctrl+c'] interrupts it, or this "
+        "line with interrupt=true interrupts it and then types the line."
         + as_send)
 
 
@@ -2972,6 +3010,17 @@ OTHER_TOOLS_ARGUMENTS = {
 }
 
 
+# Our own tools' arguments mixed up between them: what each is in this one
+# (an eval's Claude Code x Qwen: send session="debug" input="q").
+OWN_TOOLS_ARGUMENTS = {
+    ("send", "input"): "'input' (that is `run`'s: here text=, typed with no Enter -- add keys=[\"enter\"], "
+                       "or `run` input= types the line and waits for its result)",
+    ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
+    ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
+                     "interrupt=true here stops a running command before the line)",
+}
+
+
 def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
     """The refusal of a call with arguments the tool does not have."""
     def abbreviates(k: str, n: str) -> bool:  # "cmd" for "command", not "cwd"
@@ -2979,6 +3028,8 @@ def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
         return k[:1] == n[:1] and all(c in letters for c in k)
 
     def guess(k: str) -> str:
+        if own := OWN_TOOLS_ARGUMENTS.get((tool, k)):
+            return own
         if alias := next(((n, unit) for n, unit in OTHER_TOOLS_ARGUMENTS.get(k, ()) if n in known), None):
             return f"{k!r} (another shell tool's argument: here {alias[0]}{alias[1]})"
         if k == "workdir" and "cwd" not in known:
@@ -3277,6 +3328,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         save_to: Annotated[str | None, Field(description="a file to copy the command's output into, as `> FILE 2>&1` would, while the command itself runs unredirected (the reply and the log are as usual): written at once, kept up to date while it runs, written in full when it ends.  A relative path is in the session's current directory; the file is on the machine this server runs on, even for a session over ssh.  For a later diff or grep by other tools; `read` and `search` need no file")] = None,
         last_lines: Annotated[int | None, Field(description="reply with only the last N lines of the output (like `| tail -N`, but the command runs unfiltered and the log keeps everything; the reply says where the rest is); with `show`, how many last lines follow the matches (default 3)")] = None,
         show_after: Annotated[int, Field(description="with `show`: also this many lines after each match (like `grep -A N`); a match is numbered \"N:\", a line after one \"N-\"")] = 0,
+        interrupt: Annotated[bool, Field(description="if a command is running and holds the session (a `tail -f`, a server), interrupt it with ctrl+c first, then type the line once the prompt is back; the reply names what was interrupted.  Only for a command you mean to stop")] = False,
     ) -> str:
         """Type a line into the session, press Enter, and wait for the result:
         the session's form of a shell tool call, and of a line typed at gdb's
@@ -3338,6 +3390,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             if integrated_note := await integrate_adopted(s):
                 forced += integrated_note + "\n"
             pattern = call_prompt(s, prompt_pattern)
+            if interrupt:
+                forced += await interrupt_first(s, pattern)
             if s.at_shell_prompt or (s.shell_in_front() and s.at_plain_shell_prompt()):
                 await second_guesses(s, input, last_lines, save_to)
             were_open = open_command_ids(s) | s.open_at_reply
