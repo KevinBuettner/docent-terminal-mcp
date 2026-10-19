@@ -4601,10 +4601,10 @@ def test_ssh_and_into_carry_the_variables_the_session_names():
 
 @pytest.mark.second_guess
 async def test_a_habit_is_second_guessed_once_and_runs_when_sent_again(term):
-    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="s", input="seq 1 5 | tail -2")
     assert '`run` session="s" input="seq 1 5" last_lines=2' in str(e.value), e.value
-    assert "send the same input again, unchanged: it runs as it is" in str(e.value)
+    assert "sending the same line again runs it" in str(e.value)
     out = await term("regions", session="s")
     assert "seq 1 5" not in out, out  # nothing was typed
     out = await term("run", session="s", input="seq 1 5 | tail -2")  # the same line again: it runs
@@ -4619,7 +4619,7 @@ async def test_a_habit_is_second_guessed_once_and_runs_when_sent_again(term):
 @pytest.mark.second_guess
 async def test_each_habit_gets_its_own_second_guess(term):
     async def refused(line, *wanted):
-        with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+        with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
             await term("run", session="s", input=line)
         for w in wanted:
             assert w in str(e.value), e.value
@@ -4632,13 +4632,13 @@ async def test_each_habit_gets_its_own_second_guess(term):
     for line in ("seq 1 3 > /dev/null 2>&1", "sleep 1; cat /dev/null", "seq 1 3 >> out.log 2>&1", "echo a | tail -f -",
                  "( set -e; true )", "bash -ec 'set -e; true'"):
         out = await term("run", session="s", input=line, timeout_s=3)
-        assert "not typed" not in out, out
+        assert "Refused, not run" not in out, out
 
 
 @pytest.mark.second_guess
 async def test_a_redirect_before_a_trailing_semicolon_gets_its_second_guess(term):
     # An eval's `gdb --version | head -1; gdb ... -ex q > /tmp/sysgdb.txt 2>&1;` ran unasked.
-    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="s", input="echo a; seq 1 3 > out.log 2>&1;")
     assert 'input="echo a; seq 1 3" save_to="out.log"' in str(e.value), e.value
 
@@ -4648,17 +4648,17 @@ async def test_a_plain_ssh_or_su_is_offered_the_hop_that_carries_the_integration
     # The session's bashrc puts the shim on PATH after the shell starts, out
     # of /proc/PID/environ's sight: the full path, which is there for certain.
     shim = env[0] / "bin" / "dtmcp"
-    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="s", input="ssh -l root nowhere.invalid")
     assert f'`run` session="s" input="{shim} ssh -l root nowhere.invalid"' in str(e.value), e.value
     assert "`docent-terminal-mcp ssh` takes the same arguments" in str(e.value)
-    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="s", input="su - nobody")
     assert f'input="{shim} su - nobody"' in str(e.value), e.value
     # On the PATH the shell started with: the short name.
     await term("session_create", name="p", cwd=str(env[0]),
                env={"HOME": plain_home(env[0]), "PATH": f"{shim.parent}:/usr/bin:/bin"})
-    with pytest.raises(AssertionError, match="not typed -- a second guess") as e:
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="p", input="ssh nowhere.invalid")
     assert 'input="dtmcp ssh nowhere.invalid"' in str(e.value), e.value
 

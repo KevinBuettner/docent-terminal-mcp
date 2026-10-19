@@ -2475,9 +2475,9 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> N
     if habit in GUESS_NOTES:
         HABITS_NOTED.add(f"{s.dir.parent}:{ACTOR.get()}:{GUESS_NOTES[habit]}")
     raise ToolError(
-        f"not typed -- a second guess, made once: {why}  {instead}  "
-        "If the line is what you meant, send the same input again, unchanged: it runs as it is, and this is not "
-        "asked again.")
+        # (Was "not typed -- a second guess, made once: ...", the way out last:
+        # Kevin found it open to reading, and in the evals no model resent a line.)
+        f"Refused, not run (this happens once; sending the same line again runs it): {why}  {instead}")
 
 
 def as_run(s: Session, **args) -> str:
