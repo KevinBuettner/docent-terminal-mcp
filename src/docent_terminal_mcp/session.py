@@ -439,6 +439,7 @@ class Session:
         self.saves: dict[str, list[int]] = {}
         self.foreground: str | None = None  # see tmux.foreground_state
         self.prompt_place: Place | None = None  # where the shell at the last prompt is (its marker)
+        self.prompt_shell = ""  # which shell (its marker's pid) showed the last prompt
         self.place_noted: dict = {}  # agent -> the Place (or None: here) its last reply was at
         self._remote: tuple | None = None  # (pid, text position first seen) of the ssh in use
         self.foreground_since = 0.0  # since when it has been that
@@ -691,6 +692,7 @@ class Session:
             # Where this shell is (older shells' markers do not say).
             self.prompt_place = (Place(short_host(opts["h"]), opts.get("u") or None, "shell", pos)
                                  if opts.get("h") else None)
+            self.prompt_shell = shell
             # Back at the prompt: whatever drew on a grid has finished, even
             # if it left the alternate screen on.
             if self.term.full_screen:
@@ -1498,6 +1500,15 @@ class Session:
             self.foreground_since = time.monotonic()
         self.foreground = state
 
+    def inner_shell_prompt(self, command: Region) -> bool:
+        """Is the marked prompt at the cursor another shell's than the one
+        `command` runs in -- a shell it started, integrated: `docent-terminal-mcp
+        ssh HOST` arrived?  (expect waited out its timeout there, the
+        remote prompt on screen.)"""
+        return bool(self.prompt_shell and command.shell_pid and self.prompt_shell != command.shell_pid) or (
+            self.prompt_place is not None and command.host is not None
+            and short_host(command.host) != self.prompt_place.host)
+
     def remote_command(self) -> Region | None:
         """The innermost command still running in a shell on another host."""
         here = short_host(LOCAL_HOST)
@@ -2033,7 +2044,7 @@ class Session:
             elif enclosing is not None and enclosing.done:
                 outcome = "finished"
             elif at_prompt and not (at_shell and commands and not commands[-1].done
-                                    and self.shell_state == "input"):
+                                    and self.shell_state == "input" and not self.inner_shell_prompt(commands[-1])):
                 outcome = "ready"
             elif term.full_screen and progressed and quiet >= PROMPT_QUIET_S:
                 outcome = "fullscreen"

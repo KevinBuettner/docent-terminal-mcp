@@ -393,8 +393,8 @@ max_lines.  Nothing is lost:
 
 Statuses in a region's header: "running" (still going; for a command
 whose region was shown, `wait` continues it), "exit N" (a shell command
-finished; "pipestatus A B" for a pipeline; "exit status not seen" when its
-shell ended without saying, e.g. `exit` itself), "ready" (a program's
+finished; "pipestatus A B" for a pipeline; "ended its shell" for `exit`
+itself; "exit status not seen" when its shell ended without saying), "ready" (a program's
 input is back at its prompt), "waiting" (output stopped at a question or
 an unknown prompt), "settled" (quiet, nothing visibly working -- it may
 still be), "timeout" (timeout_s passed, still working; `wait` resumes),

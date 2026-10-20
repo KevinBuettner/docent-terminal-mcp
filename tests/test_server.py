@@ -822,7 +822,7 @@ async def test_nested_bash_inherits_integration(term):
     out = await term("run", session="s", input="echo inner")
     assert out.splitlines()[-1] == "inner"
     out = await term("run", session="s", input="exit 3")
-    assert "[region 4 · $ exit 3 · exit status not seen · lines" in out  # ended with the shell
+    assert "[region 4 · $ exit 3 · ended its shell · lines" in out  # ended with the shell
     regions = (await term("regions", session="s")).splitlines()
     assert "$ bash · exit 3" in regions[0]  # the outer command, closed by the outer shell
     out = await term("run", session="s", input="echo outer")
@@ -895,6 +895,24 @@ class Client_:
         self.proc.kill()
         self.proc.wait()
         os.close(self.master)
+
+
+async def test_session_list_filters_by_name_and_by_a_human_attached(term):
+    # An adjutant session wanted the user's pane, out of 65 rows.
+    await term("session_create", name="build-a")
+    await term("session_create", name="build-b")
+    out = await term("session_list", name="^build-")
+    assert [l.split("\t")[0] for l in out.splitlines()] == ["build-a", "build-b"], out
+    assert await term("session_list", attached=True) == "no sessions match"
+    c = Client_(term.socket, "build-b", 100, 30)
+    try:
+        assert await wait_for(lambda: asyncio.sleep(0, bool(tmux_cmd(term, "list-clients").strip())))
+        out = await term("session_list", attached=True)
+        assert [l.split("\t")[0] for l in out.splitlines()] == ["build-b"], out
+    finally:
+        c.kill()
+    for n in ("build-a", "build-b"):
+        await term("session_close", session=n)
 
 
 async def test_a_client_attaching_is_not_human_input(term):
@@ -3470,6 +3488,18 @@ async def test_ssh_subcommand_brings_the_integration_along(env, login_shell):
     out = await t("run", session="s", input="exit", timeout_s=10)
     assert "back on " in out, out
     assert list(remote_tmp.iterdir()) == [], list(remote_tmp.iterdir())
+    # expect, too, is back at once at the far shell's prompt: it timed out
+    # there, the prompt on screen (an adjutant session's report).
+    out = await t("expect", session="s", input="docent-terminal-mcp ssh remote-fake", timeout_s=20,
+                  respond=[{"pattern": "continue connecting", "line": "yes"}])
+    assert "[expect: the program is at its prompt" in out and "is now on remote-fake" in out, out
+    out = await t("run", session="s", input="false", timeout_s=10)
+    assert "exit 1" in out and "· on remote-fake ·" in out, out
+    # The bare `exit` passes false's 1 on to ssh: said, so ssh does not
+    # look like it failed; `exit` itself "ended its shell", not "not seen".
+    out = await t("run", session="s", input="exit", timeout_s=10)
+    assert "exit 1: the far shell's last command's, which a bare `exit` passes on" in out, out
+    assert "$ exit · on remote-fake · ended its shell" in out, out
 
 
 async def test_into_carries_the_integration_into_a_container(env):
@@ -4683,6 +4713,21 @@ def test_su_carries_the_bootstrap_as_its_session_command():
     for bad in (["-c", "id"], ["--command=id"], ["--session-command", "id"]):
         with pytest.raises(ValueError):
             su_argv(bad, None)
+
+
+def test_a_shell_from_before_the_rename_still_gives_its_nonce(monkeypatch, capsys):
+    # A pane adjutant started 19 days before had __TMCP_NONCE only: `ssh`
+    # carried none, and the hop ran without exit statuses, unsaid.
+    from docent_terminal_mcp.server import ssh_main
+    monkeypatch.delenv("__DTMCP_NONCE", raising=False)
+    monkeypatch.setenv("__TMCP_NONCE", "abc123")
+    ssh_main(["--print", "coyote.lan"])
+    out, err = capsys.readouterr()
+    assert "export __DTMCP_NONCE=abc123" in out and not err, (out, err)
+    monkeypatch.delenv("__TMCP_NONCE")
+    ssh_main(["--print", "coyote.lan"])
+    out, err = capsys.readouterr()
+    assert "__DTMCP_NONCE=" not in out and "no session nonce in the environment" in err, (out, err)
 
 
 def test_which_lines_are_plain_hops():

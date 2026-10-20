@@ -1211,6 +1211,10 @@ def describe(session: Session, region: Region) -> str:
         bits.append(f"exit 0 (stage {sigpipe + 1}: 141, SIGPIPE -- a later stage stopped reading)")
     elif s["exit_status"] is not None:
         bits.append(f"exit {s['exit_status']}")
+    elif region.kind == "command" and region.status == "done" and (region.command or "").split()[:1] in (["exit"], ["logout"]):
+        # (Its shell ended with it: no status to report -- "not seen" read
+        # as a failure after leaving an ssh hop.)
+        bits.append("ended its shell")
     elif region.kind == "command" and region.status == "done":
         bits.append("exit status not seen")
     if region.pipestatus:
@@ -1414,6 +1418,11 @@ async def note_place(s: Session) -> None:
                         and is_carrier_command(r.command)), None)
         if carrier is not None and before.via == "shell":  # (markers said where: say how it was reached)
             status = f", exit {carrier.exit_status}" if carrier.exit_status is not None else ""
+            last = next((r for r in reversed(s.regions) if r.kind == "command" and r.id > carrier.id), None)
+            if carrier.exit_status and last is not None and (last.command or "").strip() in ("exit", "logout"):
+                # A bare `exit` passes on the far shell's last status: ssh
+                # did not fail (`ls /nonexistent`, then exit: "exit 2").
+                status += ": the far shell's last command's, which a bare `exit` passes on"
             left = f"the connection to {before.label()} ({carrier.command.split()[0]}{status})"
         notes.append(f"[this session is back on {here}: {left} ended -- the next line runs here]")
     elif place.host == short_host(LOCAL_HOST):
@@ -3193,7 +3202,10 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         )
 
     @tool(annotations=ToolAnnotations(read_only_hint=True), meta={"anthropic/alwaysLoad": True, "anthropic/searchHint": 'list terminal sessions'})
-    async def session_list() -> str:
+    async def session_list(
+        name: Annotated[str | None, Field(description="only sessions whose name this regex matches (searched, as `grep` does)")] = None,
+        attached: Annotated[bool, Field(description="only sessions a human is attached to")] = False,
+    ) -> str:
         """List terminal sessions: state, what is running, size, who started each
         (you, a human, another agent), humans attached, the attach command, and
         presence: how old each session is, its last output, which agents typed
@@ -3206,6 +3218,13 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         running, its log intact."""
         out = []
         described = await mgr.describe_sessions()
+        # (65 rows on a host an editor shares, for the one pane wanted: an
+        # adjutant session's report.)
+        if name:
+            name_rx = compile_pattern(name)
+            described = [d for d in described if name_rx.search(d["name"])]
+        if attached:
+            described = [d for d in described if d["state"] == "live" and d.get("humans")]
         closed = sorted((d for d in described if d["state"] == "closed"), key=lambda d: d.get("created") or 0)
         older = closed[:-CLOSED_LISTED] if len(closed) > CLOSED_LISTED else []
         described.sort(key=lambda d: d["state"] == "closed")  # live (and exited) first; stable within each
@@ -3249,7 +3268,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         if older:
             out.append(f"[{len(older)} older closed session{'s' if len(older) > 1 else ''} not listed; "
                        f"their logs remain under {mgr.sessions_dir}]")
-        return "\n".join(out) or "no sessions"
+        return "\n".join(out) or ("no sessions match" if name or attached else "no sessions")
 
     @tool(meta={"anthropic/alwaysLoad": True, "anthropic/searchHint": 'resize a terminal session'})
     async def session_resize(
@@ -3593,7 +3612,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         host` came back at the remote prompt.  Types one short line that reads
         the integration file: this server's own on this host; on another host
         the copy the user installed there with `docent-terminal-mcp install HOST`
-        (without it the reply says so; `docent-terminal-mcp ssh HOST` needs none).
+        (without it the reply says so; `docent-terminal-mcp ssh HOST` needs none,
+        but runs a setup script on that host: ask the user first).
         For bash and zsh, and only at a prompt."""
         s = await mgr.get(session)
         async with typing_turn(s, "shell_integrate"):
@@ -3669,6 +3689,9 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         Example, ssh, handing any password prompt to the human:
           input="ssh host", respond=[{"pattern": "continue connecting", "line": "yes"},
                                      {"pattern": "[Pp]assword:", "stop": true}]
+        A plain ssh works there by prompt matching, without exit statuses;
+        input="docent-terminal-mcp ssh host" brings the shell integration along
+        for exact ones (it runs a setup script on that host: ask the user).
         Without `input`, the rules apply to a question already waiting at the
         cursor (one a `run` came back "waiting" at).
 
@@ -4692,11 +4715,24 @@ def connect(socket_path: Path, actor: str | None) -> None:
     anyio.run(bridge)
 
 
+def wrapper_nonce(tool: str) -> str | None:
+    """The session's nonce, for `ssh`/`into`/`su` to carry to the shell at
+    the far end.  A pane whose shell an older server started (before the
+    rename of 2026-10-12) has it as __TMCP_NONCE -- adjutant's pane, 19
+    days old, sent none, and the hop ran without exit statuses.  None:
+    said on stderr, since nothing else would say why."""
+    nonce = os.environ.get("__DTMCP_NONCE") or os.environ.get("__TMCP_NONCE")
+    if not nonce:
+        print(f"{NAME} {tool}: no session nonce in the environment (__DTMCP_NONCE): this shell was not started "
+              f"by the terminal server, so the far shell's exit statuses will not be tracked", file=sys.stderr)
+    return nonce
+
+
 def ssh_main(args: list[str]) -> None:
     """`NAME ssh [--print] [ssh options] [user@]host` (see remote.py)."""
     from .remote import bootstrap, carried, ssh_argv
     show = args[:1] == ["--print"]
-    nonce = os.environ.get("__DTMCP_NONCE")
+    nonce = wrapper_nonce("ssh")
     carry = carried(dict(os.environ))
     try:
         argv = ssh_argv(args[1:] if show else args, nonce, os.environ.get("DOCENT_TERMINAL_MCP_SSH", "ssh"), carry)
@@ -4713,7 +4749,7 @@ def into_main(args: list[str]) -> None:
     """`NAME into [--print] COMMAND...` (see remote.into_argv)."""
     from .remote import bootstrap, carried, into_argv
     show = args[:1] == ["--print"]
-    nonce = os.environ.get("__DTMCP_NONCE")
+    nonce = wrapper_nonce("into")
     carry = carried(dict(os.environ))
     try:
         argv = into_argv(args[1:] if show else args, nonce, carry)
@@ -4733,7 +4769,7 @@ def su_main(args: list[str]) -> None:
     """`NAME su [--print] [su options] [-] [user]` (see remote.su_argv)."""
     from .remote import bootstrap, carried, su_argv
     show = args[:1] == ["--print"]
-    nonce = os.environ.get("__DTMCP_NONCE")
+    nonce = wrapper_nonce("su")
     carry = carried(dict(os.environ))
     try:
         argv = su_argv(args[1:] if show else args, nonce, carry)
