@@ -9,5 +9,4 @@ def _second_guesses(request, monkeypatch):
     but in the tests marked second_guess: the rest type their lines once."""
     monkeypatch.setattr(server, "SECOND_GUESS_ON", "second_guess" in request.keywords)
     yield
-    server.GUESS_PENDING.clear()
-    server.GUESS_DECLINED.clear()
+    server.GUESS_ASKED.clear()

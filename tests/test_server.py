@@ -4232,6 +4232,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
     with pytest.raises(AssertionError) as e:
         await term("run", session="s", text="ls")
     assert "run has no argument 'text' (that is `send`'s: here input=" in str(e.value)
+    with pytest.raises(AssertionError) as e:
+        await term("send", session="s", text="x", timeout_s="30")
+    assert "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds" in str(e.value), e.value
     out = await term("session_list")
     assert "\ng\t" not in "\n" + out, out
 
@@ -4685,7 +4688,10 @@ async def test_a_plain_ssh_or_su_is_offered_the_hop_that_carries_the_integration
     with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
         await term("run", session="s", input="su - nobody")
     assert f'input="{shim} su - nobody"' in str(e.value), e.value
-    # On the PATH the shell started with: the short name.
+    # On the PATH the shell started with: the short name.  (Asked once per
+    # agent: as a new one here.)
+    from docent_terminal_mcp import server
+    server.GUESS_ASKED.clear()
     await term("session_create", name="p", cwd=str(env[0]),
                env={"HOME": plain_home(env[0]), "PATH": f"{shim.parent}:/usr/bin:/bin"})
     with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once; sending the same line again runs it\)") as e:
@@ -4707,6 +4713,10 @@ async def test_a_pipe_or_redirect_ending_a_command_mid_line_is_second_guessed(te
     # Sent again unchanged, each runs; a quoted ";" is not a command's end.
     out = await term("run", session="s", input="seq 50 | head -3; echo ===")
     assert "\n3\n===" in out, out
+    # Once means once: another line of a habit already asked about runs (an
+    # eval's Qwen got six redirect refusals in one trial, each a new line).
+    out = await term("run", session="s", input="seq 5 > /tmp/y.$$ 2>&1; rm -f /tmp/y.$$; echo again")
+    assert "Refused" not in out and out.endswith("again"), out
     out = await term("run", session="s", input="echo 'a | head; b' && echo ok")
     assert "Refused" not in out and out.endswith("ok"), out
 

@@ -2449,14 +2449,13 @@ def habit_notes(s: Session, command: str, regions: list[Region]) -> list[str]:
 
 # Second guesses: a line refused once, before anything is typed, with the
 # call that serves better -- the same line sent again runs as it is, and
-# that agent is not second-guessed about that habit again.  The notes
+# so does any later line of that habit from that agent.  The notes
 # above come after the command and did not change a habit within a run
 # (four tailcall runs: "did it anyway out of shell habit"); a refusal
 # comes before, and costs at most one call per habit.  Kevin's idea, from
 # Claude Code's refusal of `sleep N; cat`.
 SECOND_GUESS_ON = os.environ.get("DOCENT_TERMINAL_MCP_SECOND_GUESS", "1") != "0"
-GUESS_PENDING: dict[str, str] = {}  # "sessions dir:agent:habit" -> the line refused
-GUESS_DECLINED: set[str] = set()  # ... whose agent sent the refused line again
+GUESS_ASKED: set[str] = set()  # "sessions dir:agent:habit" refused once: not again
 # The note a habit's refusal stands in for (said there; not again after).
 GUESS_NOTES = {"pipe_tail": "pipe_tail", "redirect": "redirect_log", "background": "background_job"}
 
@@ -2511,16 +2510,15 @@ POLL_READERS = {"cat", "tail", "head", "grep", "egrep", "rg", "ls", "wc", "ps", 
 
 def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> None:
     """Refuse `line` with why and what instead, the first time this agent
-    shows `habit` on this server -- unless it is the line refused last time,
-    sent again: then it runs, and the habit is not refused again."""
+    shows `habit` on this server; after that, the habit's lines run -- the
+    refused one sent again, and any other.  (Until 5c3dd1b only the same
+    line sent again ended it, and each new variant was refused anew: an
+    eval's Qwen got six redirect refusals in one trial, each "this happens
+    once".)"""
     key = f"{s.dir.parent}:{ACTOR.get()}:{habit}"
-    if not SECOND_GUESS_ON or key in GUESS_DECLINED:
+    if not SECOND_GUESS_ON or key in GUESS_ASKED:
         return
-    if GUESS_PENDING.get(key) == line:
-        del GUESS_PENDING[key]
-        GUESS_DECLINED.add(key)
-        return
-    GUESS_PENDING[key] = line
+    GUESS_ASKED.add(key)
     if habit in GUESS_NOTES:
         HABITS_NOTED.add(f"{s.dir.parent}:{ACTOR.get()}:{GUESS_NOTES[habit]}")
     raise ToolError(
@@ -3113,6 +3111,8 @@ OTHER_TOOLS_ARGUMENTS = {
 OWN_TOOLS_ARGUMENTS = {
     ("send", "input"): "'input' (that is `run`'s: here text=, typed with no Enter -- add keys=[\"enter\"], "
                        "or `run` input= types the line and waits for its result)",
+    ("send", "timeout_s"): "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds -- `send` waits only "
+                           "for output to settle; `wait` waits for a command)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",
