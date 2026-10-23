@@ -277,7 +277,11 @@ async def test_a_closed_sessions_logs_are_read_and_reading_counts_as_use(env):
         assert [n for n, _ in await t.mgr.sweep()] == ["past"]
 
 
-async def test_a_removed_session_says_when_and_why(env):
+async def test_a_removed_session_says_when_and_why(env, monkeypatch):
+    # (Outside tmux: with no session left, tmux 3.7's `list-panes -a` says
+    # "no current target", and nothing was ever swept -- unseen in runs
+    # inside a tmux pane, whose $TMUX gives it a target.)
+    monkeypatch.delenv("TMUX", raising=False)
     home, socket = env
     async with Server(home, socket) as t:
         t.mgr.keep_days = 3

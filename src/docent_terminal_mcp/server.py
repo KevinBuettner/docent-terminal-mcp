@@ -337,6 +337,12 @@ class Manager:
         try:
             ids = set((await self.tmux.run("list-panes", "-a", "-F", "#{pane_id}")).split())
         except TmuxError:
+            # A server up with no session left: tmux 3.7 says "no current
+            # target" to list-panes -a (unless run inside tmux, whose $TMUX
+            # gives it one) -- no pane, not an odd answer.  As None, nothing
+            # was ever swept there.
+            if not (await self.tmux.run("list-sessions", "-F", "#{session_name}", check=False)).strip():
+                return set()
             return None
         return {name for name, pane_id in self.tmux.panes.items() if pane_id in ids}
 
@@ -2454,6 +2460,40 @@ GUESS_DECLINED: set[str] = set()  # ... whose agent sent the refused line again
 # The note a habit's refusal stands in for (said there; not again after).
 GUESS_NOTES = {"pipe_tail": "pipe_tail", "redirect": "redirect_log", "background": "background_job"}
 
+def line_segments(line: str) -> list[tuple[int, int]]:
+    """The spans of a line's commands between top-level `;`, `&&` and `||`
+    (not inside quotes, $( ), ( ) or { }): where a pipe or redirect ends one
+    that is not the last."""
+    spans, start, depth, quote, i = [], 0, 0, "", 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = ""
+        elif c == "\\":
+            i += 1
+        elif c in "'\"":
+            quote = c
+        elif c in "({":
+            depth += 1
+        elif c in ")}":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and (c == ";" or line[i:i + 2] in ("&&", "||")):
+            spans.append((start, i))
+            i += 1 if c == ";" else 2
+            start = i
+            continue
+        i += 1
+    spans.append((start, len(line)))
+    return spans
+
+
+# `| tail`/`| head` ending a command that is not the line's last (`make | tail
+# -5; echo done`): an eval's Qwen, 18 times in d2a4031's rounds.
+MID_PIPE = re.compile(r"\s*\|\s*(?P<what>tail|head)(?:\s+(?:-n\s*|-)\d+)?\s*$")
+
 # `| tail [-n] N` ending the line, after an optional `| tee FILE`.
 TAIL_END = re.compile(r"^(?P<cmd>.*?\S)(?:\s*\|\s*tee\s+(?P<tee>[^\s|;&<>-][^\s|;&<>]*))?"
                       r"\s*\|\s*tail(?:\s+(?:-n\s*|-)(?P<n>\d+))?\s*$")
@@ -2549,19 +2589,28 @@ def hop_without_integration(line: str) -> str | None:
     return None
 
 
-async def second_guesses(s: Session, line: str, last_lines: int | None, save_to: str | None) -> None:
-    """The second guesses for a line typed at a shell's prompt."""
+async def second_guesses(s: Session, line: str, last_lines: int | None, save_to: str | None,
+                         tool: str = "run") -> None:
+    """The second guesses for a line typed at a shell's prompt.  For
+    `expect`'s input, those about where the line runs and the shell it
+    leaves -- a plain ssh or su, a shell without the integration, `set -e`:
+    the others offer `run`'s arguments (last_lines, save_to), and an
+    expect's line is mostly a program that asks.  (A bare `ssh coyote.lan`
+    went through expect unasked: an adjutant assistant's check.)"""
     if "\n" in line:
         return
     if (hop := hop_without_integration(line)) and (cmd := await own_command(s)):
         what = "the host" if hop == "ssh" else "the user"
+        instead = (as_run(s, input=cmd + " " + line.strip()) if tool == "run" else
+                   f"`expect` session={json.dumps(s.name)} input={json.dumps(cmd + ' ' + line.strip())} with the "
+                   f"same respond rules")
         second_guess(
             s, f"hop_{hop}", line,
             f"a plain `{hop}` leaves a shell without the shell integration on {what}'s side: replies there "
             "cannot tell when a command ends or how it ended (no exit status; a quiet command comes back "
             "\"settled\" as if done), and further hops go unseen.",
             f"`{NAME} {hop}` takes the same arguments and carries the integration along for this {hop} (nothing "
-            f"is installed): {as_run(s, input=cmd + ' ' + line.strip())}.")
+            f"is installed): {instead}.")
     if not s.at_shell_prompt and s.shell_in_front() and s.at_plain_shell_prompt():
         # A shell without the integration (su, sudo -i, ssh): a reply cannot
         # tell when a command ends -- a quiet `make check` came back "settled"
@@ -2576,6 +2625,16 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
                 "it were done.",
                 f"`shell_integrate` session={json.dumps(s.name)} adds it in one call (bash or zsh); then send this "
                 "line.")
+    if SET_ERREXIT.search(line):
+        second_guess(
+            s, "errexit", line,
+            "`set -e` typed at this shell's prompt stays on in it: the first command that fails later -- a "
+            "test run, a grep that finds nothing -- exits the shell, and the session with it (an eval build's "
+            "`set -e; ...` left one so, and a later pytest's exit 4 closed it).",
+            f"For this line only: {as_run(s, input='( ' + line.strip() + ' )')} -- the subshell takes the set -e "
+            "with it.")
+    if tool != "run":
+        return
     if m := BACKGROUND_END.search(line):
         second_guess(
             s, "background", line,
@@ -2606,14 +2665,30 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
             "this output goes to the file only: not to this session's log, so the `read` and `search` tools, "
             "`show` and a human watching never see it.",
             f"Both, the file and the log: {as_run(s, input=m['cmd'], save_to=target.strip(chr(39) + chr(34)))}.")
-    if SET_ERREXIT.search(line):
-        second_guess(
-            s, "errexit", line,
-            "`set -e` typed at this shell's prompt stays on in it: the first command that fails later -- a "
-            "test run, a grep that finds nothing -- exits the shell, and the session with it (an eval build's "
-            "`set -e; ...` left one so, and a later pytest's exit 4 closed it).",
-            f"For this line only: {as_run(s, input='( ' + line.strip() + ' )')} -- the subshell takes the set -e "
-            "with it.")
+    # The same, ending a command that is not the line's last: `make > log
+    # 2>&1; echo EXIT=$?` (an eval's gdb, its prompt sent to the file, and a
+    # run timed out typing into it).  A command's exit status comes with the
+    # reply: the echo is not needed either.
+    for a, b in line_segments(line)[:-1]:
+        part = line[a:b]
+        if m := MID_PIPE.search(part):
+            rest = (line[:a] + part[:m.start()] + line[b:]).strip()
+            second_guess(
+                s, "pipe_tail", line,
+                f"`| {m['what']}` here lets only part of this command's output reach the session: the log, the "
+                "`read` and `search` tools and a human watching never see the rest, and a reply already keeps "
+                "the first and last lines of long output.",
+                f"All of it, the reply clipped as usual: {as_run(s, input=rest)} -- with show=REGEX for the lines "
+                "you want.")
+        if (m := REDIRECT_END.match(part)) and (target := m["a"] or m["b"]) != "/dev/null" \
+                and await s.where() is None:
+            rest = (line[:a] + m["cmd"] + line[b:]).strip()
+            second_guess(
+                s, "redirect", line,
+                "this command's output goes to the file only: not to this session's log, so the `read` and "
+                "`search` tools, `show` and a human watching never see it -- and a program that asks (gdb at "
+                "its prompt) asks into the file, unseen.",
+                f"Both, the file and the log: {as_run(s, input=rest, save_to=target.strip(chr(39) + chr(34)))}.")
     if (m := SLEEP_POLL.match(line)) and float(m["n"]) * {"": 1, "s": 1, "m": 60, "h": 3600}[m["unit"]] >= 5 \
             and os.path.basename(m["rest"].split()[0]) in POLL_READERS:
         second_guess(
@@ -2623,6 +2698,20 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
             "For a command running in a session: the `wait` tool on it, with until=REGEX (it returns the moment "
             "the output matches) or a timeout_s up to 1500.  For a file or a condition: "
             f"{json.dumps('until COND; do sleep 1; done; ' + m['rest'])} returns as soon as it holds.")
+
+
+def typed_not_submitted(s: Session, text: str, keys: list[str], finished: list) -> str | None:
+    """A word `send` typed with no Enter, left on a program's input line:
+    say so.  An eval's gdb got send text="quit" -- "no new output", no word
+    that it was never submitted; a ctrl+d then only deleted on that line,
+    and the next `run` typed its line after the "quit".  (Tab completion, a
+    one-key answer, an editor's keys: no note.)"""
+    word = text.strip()
+    if (len(word) < 2 or "\r" in text or "\t" in text or keys or finished or s.term.full_screen
+            or s.at_shell_prompt or not s.term.cursor_text().rstrip().endswith(word)):
+        return None
+    return (f"[{word[-40:]!r} is on the input line, not submitted: `send` presses no Enter -- keys=[\"enter\"] "
+            "submits it (or ctrl+u clears it); `run` input= types a line, presses Enter and waits for the answer]")
 
 
 async def interrupt_notes(s: Session, regions: list[Region]) -> list[str]:
@@ -3612,8 +3701,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         host` came back at the remote prompt.  Types one short line that reads
         the integration file: this server's own on this host; on another host
         the copy the user installed there with `docent-terminal-mcp install HOST`
-        (without it the reply says so; `docent-terminal-mcp ssh HOST` needs none,
-        but runs a setup script on that host: ask the user first).
+        (without it the reply says so; `docent-terminal-mcp ssh HOST` needs none).
         For bash and zsh, and only at a prompt."""
         s = await mgr.get(session)
         async with typing_turn(s, "shell_integrate"):
@@ -3689,9 +3777,9 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         Example, ssh, handing any password prompt to the human:
           input="ssh host", respond=[{"pattern": "continue connecting", "line": "yes"},
                                      {"pattern": "[Pp]assword:", "stop": true}]
-        A plain ssh works there by prompt matching, without exit statuses;
-        input="docent-terminal-mcp ssh host" brings the shell integration along
-        for exact ones (it runs a setup script on that host: ask the user).
+        A plain ssh like this one is refused once (no exit statuses on the
+        far side): "docent-terminal-mcp ssh host" carries the shell
+        integration along; sent again unchanged, the plain one runs.
         Without `input`, the rules apply to a question already waiting at the
         cursor (one a `run` came back "waiting" at).
 
@@ -3728,6 +3816,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 await check_human(s, force)
                 if discard_pending(s, force):
                     forced = await clear_prompt(s) + "\n"
+                if s.at_shell_prompt or (s.shell_in_front() and s.at_plain_shell_prompt()):
+                    await second_guesses(s, input, None, None, tool="expect")
             if not s.at_shell_prompt:
                 report_foreign_input(s)
             were_open = open_command_ids(s) | s.open_at_reply
@@ -3945,6 +4035,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             s.close_stale_input(interrupted=bool(interrupt))
             if several and not s.term.full_screen:  # (an editor in insert mode: just typing)
                 notes += note_once(s, "send_lines", SEND_LINES_NOTE)
+            if unsubmitted := typed_not_submitted(s, text, tmux_keys, finished):
+                notes.append(unsubmitted)
             return "\n".join(head + ([out] if out else []) + notes + [f"[finished: {d[1:]}" for d in finished]
                              + interrupted)
 

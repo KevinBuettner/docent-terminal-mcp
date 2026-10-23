@@ -4694,6 +4694,52 @@ async def test_a_plain_ssh_or_su_is_offered_the_hop_that_carries_the_integration
 
 
 @pytest.mark.second_guess
+async def test_a_pipe_or_redirect_ending_a_command_mid_line_is_second_guessed(term):
+    # An eval's gdb: `gdb ... > /tmp/gdbdbg.txt 2>&1; echo EXIT=$?` sent its
+    # prompt to the file; and `| head; echo ===; tail ...` 18 times.
+    with pytest.raises(AssertionError, match=r"Refused, not run") as e:
+        await term("run", session="s", input="seq 50 > /tmp/x.$$ 2>&1; echo EXIT=$?")
+    assert "this command's output goes to the file only" in str(e.value), e.value
+    assert 'input="seq 50; echo EXIT=$?" save_to="/tmp/x.$$"' in str(e.value), e.value
+    with pytest.raises(AssertionError, match=r"Refused, not run") as e:
+        await term("run", session="s", input="seq 50 | head -3; echo ===")
+    assert "`| head` here lets only part" in str(e.value) and 'input="seq 50; echo ==="' in str(e.value), e.value
+    # Sent again unchanged, each runs; a quoted ";" is not a command's end.
+    out = await term("run", session="s", input="seq 50 | head -3; echo ===")
+    assert "\n3\n===" in out, out
+    out = await term("run", session="s", input="echo 'a | head; b' && echo ok")
+    assert "Refused" not in out and out.endswith("ok"), out
+
+
+async def test_send_says_when_its_text_was_not_submitted(term):
+    # An eval's gdb got send text="quit": "no new output", and the "quit"
+    # stayed on the line under the next run's command.
+    await term("run", session="s", input="python3 -q", timeout_s=10)
+    out = await term("send", session="s", text="quit")
+    assert "'quit' is on the input line, not submitted" in out and 'keys=["enter"]' in out, out
+    out = await term("send", session="s", text="()", keys=["enter"])  # submitted: no note
+    assert "not submitted" not in out, out
+
+
+@pytest.mark.second_guess
+async def test_expect_at_a_shell_prompt_gets_the_hop_second_guess(term, env):
+    # An adjutant assistant's bare `ssh coyote.lan` went through expect
+    # unasked: only run asked.  expect's suggestion is an expect.
+    shim = env[0] / "bin" / "dtmcp"
+    with pytest.raises(AssertionError, match=r"Refused, not run \(this happens once") as e:
+        await term("expect", session="s", input="ssh nowhere.invalid", timeout_s=5,
+                   respond=[{"pattern": "continue connecting", "line": "yes"}])
+    assert f'`expect` session="s" input="{shim} ssh nowhere.invalid" with the same respond rules' in str(e.value), e.value
+    # Sent again unchanged: it runs.
+    out = await term("expect", session="s", input="ssh nowhere.invalid", timeout_s=10,
+                     respond=[{"pattern": "continue connecting", "line": "yes"}])
+    assert out.startswith("[expect:"), out
+    # `run`'s own habits are not expect's to refuse: it has no last_lines.
+    out = await term("expect", session="s", input="seq 30 | tail -3", timeout_s=10, respond=[])
+    assert "Refused" not in out and "\n30" in out, out
+
+
+@pytest.mark.second_guess
 async def test_a_shell_without_the_integration_is_second_guessed(term):
     out = await term("run", session="s", input="env -i PS1='plain$ ' bash --norc --noprofile -i", timeout_s=5)
     assert "plain$" in out, out
