@@ -157,6 +157,26 @@ async def test_delete_on_close(env):
         assert [n for n, _ in await t.mgr.sweep(marked_only=True)] == ["later"]
 
 
+async def test_a_live_session_from_before_its_host_was_recorded_is_this_servers(env):
+    # Sessions made before 2026-10-05 have no "host" or "tmux_socket": on
+    # f44-mesa-1 (state dir ~/.local/state/terminal-mcp, no host in its
+    # name) delete_on_close said "made by a server on another host" of a
+    # session live in its own tmux, and their logs were never swept.
+    home, socket = env
+    async with Server(home, socket) as t:
+        await t("session_create", name="old", cwd=str(home), env={"HOME": plain_home(home)})
+        path = t.dir / "old" / "meta.json"
+        meta = json.loads(path.read_text())
+        for key in ("host", "tmux_socket", "tmux_socket_path"):
+            meta.pop(key)
+        path.write_text(json.dumps(meta))
+        out = await t("session_logs", session="old", action="delete_on_close")
+        assert "will be deleted when it closes" in out, out
+        assert json.loads(path.read_text())["tmux_socket"] == socket
+        out = await t("session_close", session="old")
+        assert "its logs were deleted" in out and not (t.dir / "old").exists(), out
+
+
 async def test_a_reused_name_marked_delete_on_close_is_not_archived(env):
     home, socket = env
     async with Server(home, socket) as t:

@@ -189,6 +189,7 @@ async def test_shell_habits_are_remarked_on_once(term):
     assert "[note:" not in out, out  # gdb started to say something about itself
     out = await term("run", session="s", input="gdb -q -nx -batch -ex 'print 41+1'")
     assert "$1 = 42" in out and "-batch suits a single question; for a series about the same program" in out, out
+    assert "no prompt_pattern needed (its prompt is known)" in out, out  # (Qwen added one, going live)
     assert "start it once live -- `gdb -q -nx -ex 'print 41+1'` -- and ask each at its (gdb) prompt" in out, out
     out = await term("run", session="s", input="gdb -q -nx -batch -ex 'print 2'")
     assert "[note:" not in out  # once per session

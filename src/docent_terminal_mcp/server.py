@@ -293,9 +293,9 @@ class Manager:
         if not NAME_RE.match(session) or not (directory / "meta.json").exists():
             raise ToolError(f"no logs of a session named {session!r} (session_list names the sessions and closed "
                             "ones' NAME.N)")
+        live = await self.live_names()  # (first: a live session of an older meta gets its host here)
         meta = json.loads((directory / "meta.json").read_text())
         here = retention.made_here(meta, self.home, self.tmux.socket)
-        live = await self.live_names()
         is_live = (live is None or session in live or await self.tmux.has_session(session)) if here else None
         whose = meta.get("started_by")
         whose = "" if whose in (None, ACTOR.get()) else f" (started by {whose})"
@@ -344,7 +344,29 @@ class Manager:
             if not (await self.tmux.run("list-sessions", "-F", "#{session_name}", check=False)).strip():
                 return set()
             return None
-        return {name for name, pane_id in self.tmux.panes.items() if pane_id in ids}
+        live = {name for name, pane_id in self.tmux.panes.items() if pane_id in ids}
+        self._stamp_legacy(live)
+        return live
+
+    def _stamp_legacy(self, live: set[str]) -> None:
+        """Sessions made before 2026-10-05 have no "host" or "tmux_socket" in
+        their meta: unless the state directory names the host, they counted
+        as another server's -- their logs never swept, session_logs refused
+        (f44-mesa-1: 31 of 57).  One live in this server's tmux is this
+        server's: say so in its meta, which then holds when it closes."""
+        for name in live:
+            path = self.sessions_dir / name / "meta.json"
+            try:
+                meta = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if "host" in meta or "tmux_socket" in meta:
+                continue
+            meta.update({"host": retention.HOST, "tmux_socket": self.tmux.socket,
+                         "tmux_socket_path": self.tmux.expected_socket_path()})
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(meta, indent=1))
+            tmp.replace(path)
 
     def _due(self, directory: Path, live: set[str], marked_only: bool) -> str | None:
         """Why this directory's logs may go now, or None to keep them."""
@@ -2204,10 +2226,12 @@ def gdb_one_shot(line: str) -> bool:
 def gdb_one_shot_note(line: str) -> str:
     live = live_gdb_line(line)
     # A trade-off, not a rule: for one question -batch is right; for a
-    # series, a live gdb.
+    # series, a live gdb.  (Qwen, told to go live, added a prompt_pattern
+    # it thought it needed: 2 of b4e96f5's 5 trials that passed one.)
     return ("[note: -batch suits a single question; for a series about the same program, start it once live"
             + (f" -- `{live}` --" if live else "")
-            + " and ask each at its (gdb) prompt with the `run` tool: the session keeps it up between calls]")
+            + " and ask each at its (gdb) prompt with the `run` tool, no prompt_pattern needed (its prompt is "
+            "known): the session keeps it up between calls]")
 
 
 REDIRECT = re.compile(r"(?<![<\d])>>?\s*(?P<a>[\w./~$-]+).*2>&1|&>>?\s*(?P<b>[^\s;|&)]+)")
