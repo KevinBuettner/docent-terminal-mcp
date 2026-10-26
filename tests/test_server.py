@@ -3953,6 +3953,24 @@ async def test_close_leaves_a_terminal_someone_is_using(env):
     assert "closed 'theirs'" in await build_server(*env).terminal_manager.close_sessions("theirs", force=True)
 
 
+async def test_close_refusal_names_a_command_with_no_label(env):
+    # An eval's session_close: "list index out of range" -- the running
+    # command's label was empty, and ''.splitlines()[0] has nothing.
+    t = Term(*env)
+    await t("session_create", name="theirs", env={"HOME": plain_home(env[0])})
+    path = env[0] / "sessions" / "theirs" / "meta.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "started_by": "viewer"}))
+    await t("run", session="theirs", input="sleep 600", timeout_s=1)
+    regions = env[0] / "sessions" / "theirs" / "regions.jsonl"
+    lines = [json.loads(l) for l in regions.read_text().splitlines()]
+    regions.write_text("".join(json.dumps({**r, "command": "" if r["command"] == "sleep 600" else r["command"]}) + "\n"
+                               for r in lines))
+    with pytest.raises(AssertionError) as e:
+        await t("session_close", session="theirs")
+    assert "is viewer's and `` (region 1) is running there" in str(e.value), e.value
+    assert "closed 'theirs'" in await build_server(*env).terminal_manager.close_sessions("theirs", force=True)
+
+
 async def test_wait_until(term):  # symmetry with run until=
     # A pattern in output not yet shown returns at once, the command still
     # running; one that never matches is a plain wait; output shown before

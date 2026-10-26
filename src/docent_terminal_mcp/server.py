@@ -242,7 +242,7 @@ class Manager:
                 running = [r for r in s.regions if r.kind == "command" and not r.done]
                 jobs = await foreground_jobs(s)
                 if running or jobs:
-                    what = (f"`{(running[-1].command or '').splitlines()[0][:60]}` (region {running[-1].id})"
+                    what = (f"`{(running[-1].command or '').partition(chr(10))[0][:60]}` (region {running[-1].id})"
                             if running else named(jobs))
                     whose = "a human's" if by in (None, "human") else f"{by}'s"
                     refusals.append(f"session {name!r} is {whose} and {what} is running there")
@@ -271,7 +271,7 @@ class Manager:
             whose = (f" (started by {started_by}, not you)" if started_by and started_by != ACTOR.get()
                      else " (a pane nobody started: adopted)" if s.meta.get("adopted") else "")
             ended = ("; it ended what was running: " + ", ".join(
-                f"`{(r.command or '').splitlines()[0][:60]}` (region {r.id})" for r in running[-3:])) if running else ""
+                f"`{(r.command or '').partition(chr(10))[0][:60]}` (region {r.id})" for r in running[-3:])) if running else ""
             if retention.marked(s.dir, retention.ON_CLOSE_MARK):
                 self.delete_logs(s.dir, "closed, marked delete-on-close")
                 out.append(f"closed {name!r}{whose}{ended}; its logs were deleted (it was marked delete-on-close)")
@@ -1048,13 +1048,20 @@ def signal_job(job: list[Process], signum: int) -> None:
         raise ProcessLookupError if gone == len(job) else PermissionError
 
 
+def exit_said(status, form: str = " (status {})") -> str:
+    """The status in `form`, or nothing when tmux kept none -- a pane's
+    program killed by a signal shows no status there ("has exited (status
+    None)" in an eval's reply)."""
+    return form.format(status) if status is not None else ""
+
+
 async def refuse_if_exited(s: Session) -> None:
     """Nothing can be typed into a session whose program has exited."""
     info = await s.tmux.pane_info(s.name)
     s.note_pane(info)  # which program is in the foreground: its prompt is known by it
     if info.dead:
         s.pane_exited(info)
-        raise ToolError(f"the program in session {s.name!r} has exited (status {info.dead_status}); its log "
+        raise ToolError(f"the program in session {s.name!r} has exited{exit_said(info.dead_status)}; its log "
                         f"remains (read, search).  session_close ends the tmux session; session_create "
                         f"starts a new one")
 
@@ -3346,9 +3353,9 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 continue
             state = d["state"]
             if state == "closed" and d.get("exit_status") is not None:
-                state += f", exited ({d['exit_status']})"
+                state += f", exited{exit_said(d['exit_status'], ' ({})')}"
             elif state == "exited":
-                state = f"exited ({d['exit_status']}); session_close ends the tmux session, logs are kept"
+                state = f"exited{exit_said(d['exit_status'], ' ({})')}; session_close ends the tmux session, logs are kept"
             elif state == "error":
                 state = f"error: {d['error']}"
             elif state == "live":
@@ -3673,7 +3680,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 return out
             elif region.status == "exited":
                 info = await mgr.tmux.pane_info(session)
-                out += f"\n[the program in this session exited with status {info.dead_status}]"
+                out += f"\n[the program in this session exited{exit_said(info.dead_status, ' with status {}')}]"
             elif region.status == "fullscreen":
                 out += f"\n[{STATUS_HINTS['fullscreen']}]\n" + await render_screen(mgr.tmux, s, max_rows=max_lines)
             elif region.status == "waiting" and prompt_pattern is not None and (
@@ -3868,7 +3875,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 await s.wait(lambda: all(r.done for r in strayed), 2)
             outcome = EXPECT_OUTCOMES[result.outcome]
             if result.outcome == "exited":
-                outcome += f" with status {(await mgr.tmux.pane_info(session)).dead_status}"
+                outcome += exit_said((await mgr.tmux.pane_info(session)).dead_status, " with status {}")
             asked_hint = None
             if result.outcome == "unanswered" and (at := s.term.cursor_text().strip()):
                 # Say which: "a question no rule answers" right after a rule
@@ -4643,7 +4650,7 @@ def connect(socket_path: Path, actor: str | None) -> None:
         with the call's input -- that the command did reach the shell."""
         try:
             args = original.message.params.get("arguments") or {}
-            first = (args.get("input") or "").splitlines()[0].strip()
+            first = (args.get("input") or "").partition(chr(10))[0].strip()
             text = "\n".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
             m = re.search(r"\[region (\d+) · [^\n]*?" + re.escape(first[:60]), text) if first else None
         except (AttributeError, IndexError, TypeError):
