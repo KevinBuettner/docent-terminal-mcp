@@ -2545,6 +2545,14 @@ def line_segments(line: str) -> list[tuple[int, int]]:
     return spans
 
 
+def rejoin(line: str, a: int, b: int, command: str) -> str:
+    """`line` with its command at [a, b) replaced by `command`: a space
+    before what follows, `&&` and `||` too (`make 2>&1&& git ...` read as
+    garbled to a Codex GLM)."""
+    rest = line[b:]
+    return (line[:a] + command.rstrip() + (" " if rest[:1] in ("&", "|") else "") + rest).strip()
+
+
 # `| tail`/`| head` ending a command that is not the line's last (`make | tail
 # -5; echo done`): an eval's Qwen, 18 times in d2a4031's rounds.
 # (Not `| head`: there it keeps a reply short, which the reply's own
@@ -2729,7 +2737,7 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
     for a, b in line_segments(line)[:-1]:
         part = line[a:b]
         if m := MID_PIPE.search(part):
-            rest = (line[:a] + part[:m.start()] + line[b:]).strip()
+            rest = rejoin(line, a, b, part[:m.start()])
             second_guess(
                 s, "pipe_tail", line,
                 f"`| {m['what']}` here lets only part of this command's output reach the session: the log, the "
@@ -2739,7 +2747,7 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
                 "you want.")
         if (m := REDIRECT_END.match(part)) and (target := m["a"] or m["b"]) != "/dev/null" \
                 and await s.where() is None:
-            rest = (line[:a] + m["cmd"] + line[b:]).strip()
+            rest = rejoin(line, a, b, m["cmd"])
             second_guess(
                 s, "redirect", line,
                 "this command's output goes to the file only: not to this session's log, so the `read` and "

@@ -4740,6 +4740,13 @@ async def test_a_pipe_or_redirect_ending_a_command_mid_line_is_second_guessed(te
     # eval's Qwen got six redirect refusals in one trial, each a new line).
     out = await term("run", session="s", input="seq 5 > /tmp/y.$$ 2>&1; rm -f /tmp/y.$$; echo again")
     assert "Refused" not in out and out.endswith("again"), out
+    # Before && the suggestion keeps its space (a Codex GLM was shown
+    # "... 2>&1&& git ...", and took it for a garbled copy of its line).
+    from docent_terminal_mcp.server import GUESS_ASKED
+    GUESS_ASKED.clear()
+    with pytest.raises(AssertionError, match=r"Refused, not run") as e:
+        await term("run", session="s", input="seq 9 2>&1 | tail -2 && echo done")
+    assert 'input="seq 9 2>&1 && echo done"' in str(e.value), e.value
     out = await term("run", session="s", input="echo 'a | head; b' && echo ok")
     assert "Refused" not in out and out.endswith("ok"), out
 
