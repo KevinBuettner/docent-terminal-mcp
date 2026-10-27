@@ -2483,7 +2483,7 @@ async def test_a_question_under_an_explicit_prompt_pattern_returns(env):
     out = await t("run", session="g", input="n\np 1+1", prompt_pattern=r"\(gdb\) $")
     lines = out.splitlines()
     assert "[region 3 · (gdb) p 1+1 · ready" in lines[2] and lines[3] == "$1 = 2", out
-    assert "prompt_pattern was not needed for this line" in lines[-1], out  # (gdb) is known
+    assert "not needed" not in out, out  # (gdb) is known: said once, by the call before
     assert "· ready ·" in lines[0] and "(y or [n]) n" in lines[0]
     assert lines[1] == "['n' was sent as the answer to that question, not as a command]", out
 
@@ -4750,6 +4750,16 @@ async def test_a_pattern_passed_into_a_known_prompt_is_noted_once(term):
     out = await term("run", session="s", input="6*8", prompt_pattern=r">>> $")
     assert "48" in out and "not needed" not in out, out  # once
     await term("run", session="s", input="exit()")
+
+
+async def test_a_known_pattern_is_noted_when_the_run_ends_at_a_question(term):
+    # gdb -ex ... -ex quit came back at "Quit anyway? (y or n)", not at
+    # (gdb): an eval's Qwen passed `\(gdb\) $` twice and heard nothing.
+    out = await term("run", session="s", input="sh -c 'printf \"Quit anyway? (y or n) \"; read x; echo got=$x'",
+                     prompt_pattern=r"\(gdb\) $", timeout_s=5)
+    assert "prompt_pattern was not needed to start the program" in out, out
+    out = await term("run", session="s", input="y")
+    assert "got=y" in out, out
 
 
 async def test_send_says_when_its_text_was_not_submitted(term):

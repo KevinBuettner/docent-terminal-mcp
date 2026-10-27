@@ -2309,6 +2309,24 @@ PATTERN_AT_LAUNCH_NOTE = (
     "prompt it did not know -- that reply offers the pattern]")
 
 
+# Prompts the default recognises: a prompt_pattern that matches one of them
+# adds nothing, wherever the reply ends -- at that prompt, or at a question
+# before it (gdb's "Quit anyway? (y or n)" after -ex quit: an eval's Qwen
+# sent `\(gdb\) $` twice and heard nothing, the note tied to the prompt).
+KNOWN_PROMPTS = ("(gdb) ", "(top-gdb) ", ">>> ", "In [1]: ", "(Pdb) ", "(lldb) ")
+
+
+def pattern_known(pattern: str | None) -> bool:
+    """Does `pattern` describe a prompt the default already recognises?"""
+    if not pattern:
+        return False
+    try:
+        rx = re.compile(pattern)
+    except re.error:
+        return False
+    return any(rx.search(p) and DEFAULT_PROMPT.search(p) for p in KNOWN_PROMPTS)
+
+
 PATTERN_INTO_KNOWN_NOTE = (
     "[note: prompt_pattern was not needed for this line: the program's prompt is one the default recognises, "
     "so `run` already waits for it.  Pass one only after a reply came back \"waiting\" at a prompt it did not "
@@ -3562,7 +3580,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 parts += habit_notes(s, input, regions)
                 parts += pipe_notes(s, regions, show_rx, last_lines)
                 if prompt_pattern is not None and any(r.status in ("running", "ready") for r in regions[-1:]) \
-                        and not regions[-1].done and DEFAULT_PROMPT.search(s.term.cursor_text()):
+                        and not regions[-1].done and (DEFAULT_PROMPT.search(s.term.cursor_text())
+                                                      or pattern_known(prompt_pattern)):
                     parts += note_once(s, "pattern_at_launch", PATTERN_AT_LAUNCH_NOTE)
                 for r in regions:
                     note_shown(s, r)
@@ -3665,7 +3684,8 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                                  "look before going on]")
                     break
             out = "\n".join(parts)
-            if prompt_pattern is not None and region.status == "ready" and DEFAULT_PROMPT.search(s.term.cursor_text()):
+            if prompt_pattern is not None and (region.status == "ready" and DEFAULT_PROMPT.search(s.term.cursor_text())
+                                               or pattern_known(prompt_pattern)):
                 # Into a program already at a prompt the default knows (an
                 # eval's Qwen passed `\(gdb\) $` with 9 lines into a running
                 # gdb, "y" and "quit\ny" too): the launch note never fired.
