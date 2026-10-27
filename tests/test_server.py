@@ -4728,11 +4728,14 @@ async def test_a_pipe_or_redirect_ending_a_command_mid_line_is_second_guessed(te
     assert "this command's output goes to the file only" in str(e.value), e.value
     assert 'input="seq 50; echo EXIT=$?" save_to="/tmp/x.$$"' in str(e.value), e.value
     with pytest.raises(AssertionError, match=r"Refused, not run") as e:
-        await term("run", session="s", input="seq 50 | head -3; echo ===")
-    assert "`| head` here lets only part" in str(e.value) and 'input="seq 50; echo ==="' in str(e.value), e.value
+        await term("run", session="s", input="seq 50 | tail -3; echo ===")
+    assert "`| tail` here lets only part" in str(e.value) and 'input="seq 50; echo ==="' in str(e.value), e.value
     # Sent again unchanged, each runs; a quoted ";" is not a command's end.
-    out = await term("run", session="s", input="seq 50 | head -3; echo ===")
-    assert "\n3\n===" in out, out
+    out = await term("run", session="s", input="seq 50 | tail -3; echo ===")
+    assert "\n50\n===" in out, out
+    # `| head` keeps a reply short: not refused (an Adjutant GLM: "paternalistic").
+    out = await term("run", session="s", input="seq 50 | head -2; echo +++")
+    assert "Refused" not in out and "\n2\n+++" in out, out
     # Once means once: another line of a habit already asked about runs (an
     # eval's Qwen got six redirect refusals in one trial, each a new line).
     out = await term("run", session="s", input="seq 5 > /tmp/y.$$ 2>&1; rm -f /tmp/y.$$; echo again")
@@ -4760,6 +4763,24 @@ async def test_a_known_pattern_is_noted_when_the_run_ends_at_a_question(term):
     assert "prompt_pattern was not needed to start the program" in out, out
     out = await term("run", session="s", input="y")
     assert "got=y" in out, out
+
+
+async def test_less_at_its_plain_colon_prompt_is_named_a_pager(term):
+    # git diff over a plain ssh opened less: "waiting at ':'", no word that
+    # it was a pager (an Adjutant GLM).
+    out = await term("run", session="s", input="sh -c 'printf \":\"; read x'", timeout_s=5)
+    assert "[a pager (less), not a question" in out and "--no-pager" in out, out
+    await term("send", session="s", keys=["enter"])
+
+
+async def test_a_programs_own_pipe_is_not_called_a_redirect(term):
+    # git push asking "Username for ...": its helper's output goes to git
+    # through a pipe, and the reply said to start it again "with no pipe or
+    # redirect" -- the line had none.
+    out = await term("run", session="s", timeout_s=5, input=(
+        "python3 -c \"import subprocess; subprocess.run(['bash', '-c', 'read -p Username: x'], stdout=subprocess.PIPE)\""))
+    assert "waiting for input" in out and "with no pipe or redirect" not in out, out
+    await term("send", session="s", keys=["ctrl+c"])
 
 
 async def test_send_says_when_its_text_was_not_submitted(term):

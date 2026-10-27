@@ -1932,7 +1932,8 @@ PAGER_HINTS = (
      "[a pager (more), not a question: `send` keys=[\" \"] shows the next page, `send` keys=[\"q\"] ends it]"),
     # less kept off the alternate screen (-X: systemctl's, git's LESS=FRX)
     # is no full-screen program; its prompt with -M, or at the end.
-    (re.compile(r"(^lines \d+-\d+(/\d+)?( \d+%)?( \(END\))?|\(END\))\s*$"),
+    # ... and its plain ":" (git diff over a plain ssh: "waiting at ':'").
+    (re.compile(r"(^lines \d+-\d+(/\d+)?( \d+%)?( \(END\))?|\(END\)|^:)\s*$"),
      "[a pager (less), not a question: `send` keys=[\" \"] shows the next page, `send` keys=[\"q\"] ends it.  "
      "--no-pager (systemctl, journalctl, git) or PAGER=cat before the command keeps it from stopping]"),
 )
@@ -2546,7 +2547,9 @@ def line_segments(line: str) -> list[tuple[int, int]]:
 
 # `| tail`/`| head` ending a command that is not the line's last (`make | tail
 # -5; echo done`): an eval's Qwen, 18 times in d2a4031's rounds.
-MID_PIPE = re.compile(r"\s*\|\s*(?P<what>tail|head)(?:\s+(?:-n\s*|-)\d+)?\s*$")
+# (Not `| head`: there it keeps a reply short, which the reply's own
+# clipping does only from the middle -- "paternalistic", an Adjutant GLM.)
+MID_PIPE = re.compile(r"\s*\|\s*(?P<what>tail)(?:\s+(?:-n\s*|-)\d+)?\s*$")
 
 # `| tail [-n] N` ending the line, after an optional `| tee FILE`.
 TAIL_END = re.compile(r"^(?P<cmd>.*?\S)(?:\s*\|\s*tee\s+(?P<tee>[^\s|;&<>-][^\s|;&<>]*))?"
@@ -2676,8 +2679,9 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
                 f"the shell at this prompt{where} has no shell integration, so a reply cannot tell when a command "
                 "ends or how: no exit status, and a command quiet for a few seconds comes back \"settled\" as if "
                 "it were done.",
-                f"`shell_integrate` session={json.dumps(s.name)} adds it in one call (bash or zsh); then send this "
-                "line.")
+                f"`shell_integrate` session={json.dumps(s.name)} adds it in one call (bash or zsh; it installs "
+                "nothing -- it reads a file this server, or the user, put there); or send this line again to go on "
+                "without it.")
     if SET_ERREXIT.search(line):
         second_guess(
             s, "errexit", line,
@@ -3010,15 +3014,20 @@ async def redirect_note(s: Session, jobs: list[Process] | None = None) -> str:
     if jobs is None:
         jobs = [p for p in await foreground_jobs(s) if not is_carrier(p.pid, p.command)]
     info = await s.tmux.pane_info(s.name)
-    if (where := output_elsewhere(jobs, info.tty)) and await steadily_waiting(info.tty):
+    region = s.open_command
+    typed = region.command if region is not None and region.command else None
+    # (Only a line that pipes or redirects: a program's own pipe -- git push's
+    # credential helper, asking "Username for ..." -- is not to be undone by
+    # starting it "with no pipe or redirect".)
+    if (where := output_elsewhere(jobs, info.tty)) and (typed is None or re.search(r"[|>]", typed)) \
+            and await steadily_waiting(info.tty):
         # Only a program waiting for input: a build or testsuite redirected
         # to a log is simply running (the note told a model "`wait` would
         # wait for nothing", and it went back to polling from Bash).
         # Say what to do instead, not only what is wrong: told only that,
         # a model concluded "redirect to files and use gdb -batch" and spent
         # six hours relaunching (in an evaluation).
-        region = s.open_command
-        live = live_gdb_line(region.command) if region is not None and region.command else None
+        live = live_gdb_line(typed) if typed else None
         return (f"\n[{where}, and it is waiting for input: at a prompt (gdb, python) nothing shows it.  End it "
                 "with `send` keys=['ctrl+d'] or its quit command (or signal=\"TERM\"), then start it again live, "
                 "with no pipe or redirect" + (f" -- `{live}`" if live else "") + ": the region keeps all its output, "
