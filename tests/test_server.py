@@ -2482,7 +2482,8 @@ async def test_a_question_under_an_explicit_prompt_pattern_returns(env):
     assert "· waiting ·" in out and "(y or [n])" in out and "[stopped: 1 more line not sent" in out
     out = await t("run", session="g", input="n\np 1+1", prompt_pattern=r"\(gdb\) $")
     lines = out.splitlines()
-    assert "[region 3 · (gdb) p 1+1 · ready" in lines[2] and lines[-1] == "$1 = 2", out
+    assert "[region 3 · (gdb) p 1+1 · ready" in lines[2] and lines[3] == "$1 = 2", out
+    assert "prompt_pattern was not needed for this line" in lines[-1], out  # (gdb) is known
     assert "· ready ·" in lines[0] and "(y or [n]) n" in lines[0]
     assert lines[1] == "['n' was sent as the answer to that question, not as a command]", out
 
@@ -4738,6 +4739,17 @@ async def test_a_pipe_or_redirect_ending_a_command_mid_line_is_second_guessed(te
     assert "Refused" not in out and out.endswith("again"), out
     out = await term("run", session="s", input="echo 'a | head; b' && echo ok")
     assert "Refused" not in out and out.endswith("ok"), out
+
+
+async def test_a_pattern_passed_into_a_known_prompt_is_noted_once(term):
+    # An eval's Qwen passed `\(gdb\) $` with nearly every line into a gdb
+    # already running: the launch note never fired for those.
+    await term("run", session="s", input="python3 -q", timeout_s=10)
+    out = await term("run", session="s", input="6*7", prompt_pattern=r">>> $")
+    assert "42" in out and "prompt_pattern was not needed for this line" in out, out
+    out = await term("run", session="s", input="6*8", prompt_pattern=r">>> $")
+    assert "48" in out and "not needed" not in out, out  # once
+    await term("run", session="s", input="exit()")
 
 
 async def test_send_says_when_its_text_was_not_submitted(term):

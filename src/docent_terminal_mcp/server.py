@@ -2309,6 +2309,12 @@ PATTERN_AT_LAUNCH_NOTE = (
     "prompt it did not know -- that reply offers the pattern]")
 
 
+PATTERN_INTO_KNOWN_NOTE = (
+    "[note: prompt_pattern was not needed for this line: the program's prompt is one the default recognises, "
+    "so `run` already waits for it.  Pass one only after a reply came back \"waiting\" at a prompt it did not "
+    "know -- that reply offers the pattern]")
+
+
 HABITS_NOTED: set[str] = set()  # "sessions dir:agent:habit" noted in any session of that server
 
 
@@ -3659,6 +3665,12 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                                  "look before going on]")
                     break
             out = "\n".join(parts)
+            if prompt_pattern is not None and region.status == "ready" and DEFAULT_PROMPT.search(s.term.cursor_text()):
+                # Into a program already at a prompt the default knows (an
+                # eval's Qwen passed `\(gdb\) $` with 9 lines into a running
+                # gdb, "y" and "quit\ny" too): the launch note never fired.
+                for note in note_once(s, "pattern_into_known", PATTERN_INTO_KNOWN_NOTE):
+                    out += "\n" + note
             if region.status == "finished" and enclosing is not None:
                 out += "\n[the command finished:]\n" + describe(s, enclosing)
             if shell_after is not None:
