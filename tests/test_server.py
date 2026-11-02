@@ -4790,6 +4790,17 @@ async def test_a_programs_own_pipe_is_not_called_a_redirect(term):
     await term("send", session="s", keys=["ctrl+c"])
 
 
+async def test_save_to_the_lines_own_redirect_target_is_refused(term, tmp_path):
+    # An eval's `make install > install.log 2>&1; echo INSTALL=$?` with
+    # save_to="install.log": the save replaced the install log with "INSTALL=0".
+    log = tmp_path / "install.log"
+    with pytest.raises(AssertionError, match="is the file this line's `> " + re.escape(str(log)) + "` writes too") as e:
+        await term("run", session="s", input=f"seq 3 > {log} 2>&1; echo DONE", save_to=str(log))
+    assert "nothing was done" in str(e.value) and not log.exists(), e.value
+    out = await term("run", session="s", input=f"seq 3 > {log} 2>&1; echo DONE", save_to=str(tmp_path / "other.log"))
+    assert "DONE" in out and log.read_text() == "1\n2\n3\n", out
+
+
 async def test_send_says_when_its_text_was_not_submitted(term):
     # An eval's gdb got send text="quit": "no new output", and the "quit"
     # stayed on the line under the next run's command.

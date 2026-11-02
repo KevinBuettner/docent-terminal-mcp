@@ -1705,6 +1705,30 @@ async def save_target(s: Session, path: str) -> str:
     return path
 
 
+# A redirect's target in a command line: `> f`, `>> f`, `2> f`, `&> f`
+# (not `2>&1`, whose "&1" is no file).
+REDIRECT_TARGET = re.compile(r"(?:\d|&)?>>?\s*(['\"]?)([^\s;|&<>'\"]+)\1")
+
+
+def refuse_save_to_own_redirect(line: str, target: str) -> None:
+    """save_to naming a file the line itself redirects into: the save, made
+    as the command ends, would replace what the command wrote there with
+    the little that reached the terminal (an eval's `make install >
+    install.log 2>&1; echo INSTALL=$?` with save_to="install.log" left
+    "INSTALL=0" in its install log)."""
+    base = os.path.dirname(target)
+    for m in REDIRECT_TARGET.finditer(line):
+        path = os.path.expanduser(m.group(2))
+        if os.path.normpath(path if os.path.isabs(path) else os.path.join(base, path)) == os.path.normpath(target) \
+                or (not os.path.isabs(path) and os.path.basename(path) == os.path.basename(target)
+                    and os.path.dirname(path) == ""):
+            raise ToolError(
+                f"save_to {target!r} is the file this line's `{m.group(0).strip()}` writes too: saved as the command "
+                f"ends, it would replace what the command wrote there with what reached the terminal -- nothing was "
+                f"done.  Drop the redirect (save_to then keeps the whole output in the file and in the log), or "
+                f"give save_to another file")
+
+
 def check_output_options(last_lines: int | None, show_after: int, show: str | None) -> None:
     if last_lines is not None and last_lines < 0:
         raise ToolError("last_lines must be 0 or more")
@@ -3554,6 +3578,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         check_output_options(last_lines, show_after, show)
         if save_to:
             target = await save_target(s, save_to)
+            refuse_save_to_own_redirect(input, target)
             REPLY_AFTER.get().append(lambda: save_reply(s, target))
         async with replying(s, "run"):
             await refuse_if_exited(s)
