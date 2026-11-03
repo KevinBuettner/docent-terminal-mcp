@@ -3108,7 +3108,7 @@ async def test_session_errors_say_what_to_do(term):
     await term("run", session="s", input="true")
     with pytest.raises(AssertionError, match="no session named 'build': the live sessions are s "):
         await term("run", session="build", input="true")
-    with pytest.raises(AssertionError, match=r"no region 9 in session s: its regions are 1-1"):
+    with pytest.raises(AssertionError, match=r"Error executing tool \w+: no region 9 in session s: its regions are 1-1"):
         await term("read", session="s", region=9)
     await term("session_close", session="s")
     with pytest.raises(AssertionError, match="session 's' was closed at"):

@@ -4329,7 +4329,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                     try:
                         r = s.region(region)
                     except KeyError as e:
-                        raise ToolError(str(e)) from e
+                        raise ToolError(e.args[0]) from e  # (str() of a KeyError quotes it)
                     if r.raw_start is None:
                         raise ToolError(f"region {region} predates raw offsets; read without `region`")
                     lo, hi = r.raw_start, r.raw_end if r.raw_end is not None else s.offset
@@ -4350,7 +4350,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 try:
                     r = s.region(region)
                 except KeyError as e:
-                    raise ToolError(str(e)) from e
+                    raise ToolError(e.args[0]) from e
                 s.region_file(r)  # being worked with: have its file on hand
                 rows = s.region_rows(r)
                 header = describe(s, r) + "\n"
@@ -4409,7 +4409,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                 try:
                     rows = s.region_rows(s.region(region))
                 except KeyError as e:
-                    raise ToolError(str(e)) from e
+                    raise ToolError(e.args[0]) from e
             else:
                 rows = range(0, len(s.term.lines))
             hits = [r for r, line in s.iter_lines(rows) if rx.search(line)]
