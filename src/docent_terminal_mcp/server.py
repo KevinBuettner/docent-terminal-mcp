@@ -3209,6 +3209,13 @@ OWN_TOOLS_ARGUMENTS = {
                        "or `run` input= types the line and waits for its result)",
     ("send", "timeout_s"): "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds -- `send` waits only "
                            "for output to settle; `wait` waits for a command)",
+    ("run", "background"): "'background' (none needed: at timeout_s the command keeps running, so a short timeout_s "
+                           "gives your turn back and `wait` picks it up; other work goes in another session)",
+    ("run", "run_in_background"): "'run_in_background' (another shell tool's: here none needed -- at timeout_s the "
+                                  "command keeps running, so a short timeout_s gives your turn back and `wait` picks "
+                                  "it up; other work goes in another session)",
+    ("expect", "save_to"): "'save_to' (that is `run`'s and `wait`'s: `wait` save_to= after this call copies the "
+                           "command's output, or `read` shows it from the log)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",

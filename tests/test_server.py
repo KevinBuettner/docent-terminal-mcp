@@ -4253,6 +4253,12 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("run", session="s", text="ls")
     assert "run has no argument 'text' (that is `send`'s: here input=" in str(e.value)
     with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="make check", background=True)
+    assert "'background' (none needed: at timeout_s the command keeps running" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
+        await term("expect", session="s", input="ls", respond=[], save_to="f.log")
+    assert "'save_to' (that is `run`'s and `wait`'s" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("send", session="s", text="x", timeout_s="30")
     assert "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds" in str(e.value), e.value
     out = await term("session_list")
