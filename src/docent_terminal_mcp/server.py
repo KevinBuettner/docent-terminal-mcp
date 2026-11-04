@@ -2686,6 +2686,17 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
     expect's line is mostly a program that asks.  (A bare `ssh coyote.lan`
     went through expect unasked: an adjutant assistant's check.)"""
     if "\n" in line:
+        # Each line on its own (an eval's `nohup make ... &\necho STARTED`
+        # went by every check) -- but not a heredoc's body or a quote left
+        # open, whose lines are no commands.
+        if "<<" in line or line.count("'") % 2 or line.count('"') % 2:
+            return
+        for part in line.split("\n"):
+            if part.strip():
+                try:
+                    await second_guesses(s, part, last_lines, save_to, tool)
+                except ToolError as e:
+                    raise ToolError(f"{e}  (That is one line of your input; none of its lines were sent.)") from None
         return
     if (hop := hop_without_integration(line)) and (cmd := await own_command(s)):
         what = "the host" if hop == "ssh" else "the user"

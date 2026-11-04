@@ -4818,6 +4818,20 @@ async def test_send_says_when_its_text_was_not_submitted(term):
 
 
 @pytest.mark.second_guess
+async def test_a_habit_on_one_line_of_several_is_second_guessed(term):
+    # An eval's `nohup make check > log 2>&1 &\necho STARTED` went by every
+    # check: any input with a newline did.
+    with pytest.raises(AssertionError, match="a job started with `&` cannot be waited for") as e:
+        await term("run", session="s", input="sleep 1 &\necho STARTED")
+    assert "That is one line of your input; none of its lines were sent" in str(e.value), e.value
+    out = await term("regions", session="s")
+    assert "STARTED" not in out, out
+    # A heredoc's lines are not commands.
+    out = await term("run", session="s", input="cat <<EOF\nseq 9 | tail -2\nEOF")
+    assert "Refused" not in out and "seq 9 | tail -2" in out, out
+
+
+@pytest.mark.second_guess
 async def test_expect_at_a_shell_prompt_gets_the_hop_second_guess(term, env):
     # An adjutant assistant's bare `ssh coyote.lan` went through expect
     # unasked: only run asked.  expect's suggestion is an expect.
