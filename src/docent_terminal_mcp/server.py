@@ -2736,11 +2736,17 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
     if tool != "run":
         return
     if m := BACKGROUND_END.search(line):
+        # (No nohup or redirect in what is offered: `nohup make > f 2>&1`, as
+        # first offered, is what the redirect's own refusal argues against.)
+        fg = re.sub(r"\bnohup\s+", "", line[:m.start()].rstrip(), count=1)
+        foreground = {"input": fg, "timeout_s": 1500}
+        if (r := REDIRECT_END.match(fg)) and (kept := r["a"] or r["b"]) != "/dev/null" and await s.where() is None:
+            foreground = {"input": r["cmd"], "timeout_s": 1500, "save_to": kept.strip(chr(39) + chr(34))}
         second_guess(
             s, "background", line,
             "a job started with `&` cannot be waited for -- the `wait` tool waits for the foreground, and its "
             "output and exit status come with no reply.",
-            f"In the foreground, with the reply when it ends: {as_run(s, input=line[:m.start()].rstrip(), timeout_s=1500)} "
+            f"In the foreground, with the reply when it ends: {as_run(s, **foreground)} "
             "(a client that moves long calls to the background, as Claude Code does, tells you then); other work "
             "meanwhile goes in another session (session_create, or session_split beside this one).")
     if last_lines is None and (m := TAIL_END.match(line)):

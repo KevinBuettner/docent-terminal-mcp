@@ -4824,6 +4824,13 @@ async def test_a_habit_on_one_line_of_several_is_second_guessed(term):
     with pytest.raises(AssertionError, match="a job started with `&` cannot be waited for") as e:
         await term("run", session="s", input="sleep 1 &\necho STARTED")
     assert "That is one line of your input; none of its lines were sent" in str(e.value), e.value
+    # What it offers has neither nohup nor the redirect.
+    from docent_terminal_mcp import server
+    server.GUESS_ASKED.clear()
+    with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="nohup sleep 1 > /tmp/b.log 2>&1 &")
+    assert 'input="sleep 1" timeout_s=1500 save_to="/tmp/b.log"' in str(e.value), e.value
+    server.GUESS_ASKED.clear()
     out = await term("regions", session="s")
     assert "STARTED" not in out, out
     # A heredoc's lines are not commands.
