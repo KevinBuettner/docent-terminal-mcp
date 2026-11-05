@@ -2617,6 +2617,32 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> N
         f"Refused, not run (this happens once; sending the same line again runs it): {why}  {instead}")
 
 
+# A shell command, by what gdb's input does not look like (not `p a && b` or
+# `break f if a && b`, which gdb means; its own `cd dir` and `make` are bare):
+# 121 such lines in 71 eval trials, 1 trial in 5 lately.
+SHELL_LINE = re.compile(r"^\s*(?:for\s+\w+\s+in\b.*;\s*do\b|cd\s+\S+\s*(?:&&|;)|(?:/|\./|~/)\S+\s+-\S|nohup\s"
+                        r"|(?:make|ls|grep|git)\b.*(?:&&|;|\||2>))|\$\(")
+GDB_AT = re.compile(r"\((?:top-)?gdb\)\s*$|\(y or n\)\s*(?:\[answered[^\]]*\])?\s*$")
+
+
+def second_guess_shell_line(s: Session, line: str) -> None:
+    """A line that reads as a shell command, going to gdb at its prompt or
+    question: an eval's `cd build && make -j8 check`, taken by gdb's own
+    `cd`, then by "Quit anyway? (y or n)", cost five calls."""
+    at = s.term.cursor_text().strip()
+    if not GDB_AT.search(at):
+        return
+    for part in line.split("\n"):
+        if SHELL_LINE.search(part):
+            second_guess(
+                s, "shell_line_at_gdb", line,
+                f"this looks like a shell command, but the session is at {at[-30:]!r}: gdb would read it, and the "
+                "shell never sees it (gdb has a `cd` and a `make` of its own).",
+                "For the shell: another session (session_create, or session_split beside this one), or leave gdb "
+                "first, then send it.")
+            return
+
+
 def as_run(s: Session, **args) -> str:
     """A `run` call to copy: `run` session="s" input="..." last_lines=5."""
     return "`run` " + " ".join(f"{k}={json.dumps(v, ensure_ascii=False)}"
@@ -3687,6 +3713,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
             report_foreign_input(s)
             if not force:
                 await refuse_type_ahead(s, pattern, input)
+                second_guess_shell_line(s, input)
             # Typed at a question rather than a prompt -- `read -p`, gdb's
             # "(y or n)" -- the line is its answer, whatever it was meant as.
             last = s.regions[-1] if s.regions else None

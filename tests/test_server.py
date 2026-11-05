@@ -4838,6 +4838,23 @@ async def test_a_habit_on_one_line_of_several_is_second_guessed(term):
     assert "Refused" not in out and "seq 9 | tail -2" in out, out
 
 
+@needs("gdb")
+@pytest.mark.second_guess
+async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
+    # An eval's `cd build && make check` went to gdb at its prompt, and then
+    # to its "Quit anyway?": five calls.  1 trial in 5 did something like it.
+    await term("run", session="s", input="gdb -q -nx", timeout_s=20)
+    with pytest.raises(AssertionError, match="this looks like a shell command, but the session is at '\\(gdb\\)'") as e:
+        await term("run", session="s", input="cd /tmp && make -j2 check")
+    assert "gdb has a `cd` and a `make` of its own" in str(e.value), e.value
+    # gdb's own input is left alone, and the refusal comes once.
+    out = await term("run", session="s", input="p 1 && 1")
+    assert "$1 = 1" in out, out
+    out = await term("run", session="s", input="for i in 1 2; do echo x; done")
+    assert "Refused" not in out, out
+    await term("run", session="s", input="quit")
+
+
 @pytest.mark.second_guess
 async def test_expect_at_a_shell_prompt_gets_the_hop_second_guess(term, env):
     # An adjutant assistant's bare `ssh coyote.lan` went through expect
