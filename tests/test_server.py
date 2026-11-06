@@ -4852,6 +4852,11 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     assert "$1 = 1" in out, out
     out = await term("run", session="s", input="for i in 1 2; do echo x; done")
     assert "Refused" not in out, out
+    # `cd dir` with what follows it other than && (gdb took one silently).
+    from docent_terminal_mcp import server
+    server.GUESS_ASKED.clear()
+    with pytest.raises(AssertionError, match="this looks like a shell command"):
+        await term("run", session="s", input="cd /nowhere 2>/dev/null || cd /tmp; ls")
     await term("run", session="s", input="quit")
 
 
