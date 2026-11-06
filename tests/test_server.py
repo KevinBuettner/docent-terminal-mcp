@@ -4838,6 +4838,22 @@ async def test_a_habit_on_one_line_of_several_is_second_guessed(term):
     assert "Refused" not in out and "seq 9 | tail -2" in out, out
 
 
+@pytest.mark.second_guess
+async def test_an_interactive_gdb_with_its_stdout_in_a_file_is_second_guessed(term):
+    # bilby's `gdb ... 2>&1 > trace.log`: gdb's "Quit anyway?" went to the file.
+    with pytest.raises(AssertionError, match="gdb's prompt and questions go to its stdout") as e:
+        await term("run", session="s", input="cd /tmp && gdb -nx -q ./a.out 2>&1 > trace.log; echo DONE=$?")
+    assert 'input="cd /tmp && gdb -nx -q ./a.out; echo DONE=$?" save_to="trace.log"' in str(e.value), e.value
+    from docent_terminal_mcp import server
+    server.GUESS_ASKED.clear()
+    # -batch, a make, or gdb told to quit: left alone by this one.
+    for line in ("true gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "true gdb -ex quit > /tmp/o.$$"):
+        out = await term("run", session="s", input=line)
+        assert "prompt and questions" not in out, out
+        server.GUESS_ASKED.clear()
+    await term("run", session="s", input="rm -f /tmp/o.$$")
+
+
 @needs("gdb")
 @pytest.mark.second_guess
 async def test_a_shell_line_going_to_gdb_is_second_guessed(term):

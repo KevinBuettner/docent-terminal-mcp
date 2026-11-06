@@ -2583,6 +2583,10 @@ def rejoin(line: str, a: int, b: int, command: str) -> str:
 # clipping does only from the middle -- "paternalistic", an Adjutant GLM.)
 MID_PIPE = re.compile(r"\s*\|\s*(?P<what>tail)(?:\s+(?:-n\s*|-)\d+)?\s*$")
 
+GDB_WORD = re.compile(r"(?:^|[\s/])gdb(?:\s|$)")
+STDOUT_TO_FILE = re.compile(r"\s*(?<![<>&\d])1?>\s*(?P<file>[^\s;|&<>]+)")
+STDERR_TO_OUT = re.compile(r"\s*2>&1")
+
 # `| tail [-n] N` ending the line, after an optional `| tee FILE`.
 TAIL_END = re.compile(r"^(?P<cmd>.*?\S)(?:\s*\|\s*tee\s+(?P<tee>[^\s|;&<>-][^\s|;&<>]*))?"
                       r"\s*\|\s*tail(?:\s+(?:-n\s*|-)(?P<n>\d+))?\s*$")
@@ -2799,6 +2803,20 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
             "this output goes to the file only: not to this session's log, so the `read` and `search` tools, "
             "`show` and a human watching never see it.",
             f"Both, the file and the log: {as_run(s, input=m['cmd'], save_to=target.strip(chr(39) + chr(34)))}.")
+    # An interactive gdb with its stdout in a file, in any form of redirect (a
+    # plain `> f` is fine for make, not here): its prompt and its questions go
+    # there too, and it waits unseen.  Three evals: bandicoot, dunnart, and
+    # bilby's `gdb ... 2>&1 > trace.log`, seven calls to get out.
+    for a, b in line_segments(line):
+        part = line[a:b]
+        if GDB_WORD.search(part) and "batch" not in part and "quit" not in part \
+                and (m := STDOUT_TO_FILE.search(part)) and m["file"] != "/dev/null" and await s.where() is None:
+            plain = STDERR_TO_OUT.sub("", part[:m.start()] + part[m.end():])
+            second_guess(
+                s, "gdb_redirect", line,
+                "gdb's prompt and questions go to its stdout: in a file, it asks there, unseen, and waits.",
+                f"Live, with the file kept too: {as_run(s, input=rejoin(line, a, b, plain), save_to=m['file'])}; "
+                "or -batch, for one question.")
     # The same, ending a command that is not the line's last: `make > log
     # 2>&1; echo EXIT=$?` (an eval's gdb, its prompt sent to the file, and a
     # run timed out typing into it).  A command's exit status comes with the
