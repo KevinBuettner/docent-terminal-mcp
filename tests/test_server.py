@@ -4259,6 +4259,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("expect", session="s", input="ls", respond=[], save_to="f.log")
     assert "'save_to' (that is `run`'s and `wait`'s" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
+        await term("wait", session="s", input="tail -3 build.log")
+    assert "'input' (that is `run`'s: `wait` sends nothing" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("send", session="s", text="x", timeout_s="30")
     assert "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds" in str(e.value), e.value
     out = await term("session_list")
@@ -4891,6 +4894,10 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     assert "$1 = 1" in out, out
     out = await term("run", session="s", input="for i in 1 2; do echo x; done")
     assert "Refused" not in out, out
+    from docent_terminal_mcp import server as srv
+    srv.GUESS_ASKED.clear()
+    out = await term("run", session="s", input="shell echo N=$(echo 7)")  # gdb's own shell command
+    assert "N=7" in out and "Refused" not in out, out
     # `cd dir` with what follows it other than && (gdb took one silently).
     from docent_terminal_mcp import server
     server.GUESS_ASKED.clear()

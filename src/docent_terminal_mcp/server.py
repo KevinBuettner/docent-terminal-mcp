@@ -2658,7 +2658,9 @@ def second_guess_shell_line(s: Session, line: str) -> None:
     if not GDB_AT.search(at) and "gdb" not in (s.pane_command or ""):
         return
     for part in line.split("\n"):
-        if SHELL_LINE.search(part):
+        # (gdb's own `shell CMD` and `!CMD` are meant for gdb: an eval's
+        # `shell echo LOGSIZE=$(wc -l < infrun2.log)` was refused.)
+        if SHELL_LINE.search(part) and not re.match(r"\s*(?:shell\b|!)", part):
             second_guess(
                 s, "shell_line_at_gdb", line,
                 f"this looks like a shell command, but the session is at {(at[-30:] or 'gdb')!r}: gdb would read it, and the "
@@ -3301,6 +3303,8 @@ OWN_TOOLS_ARGUMENTS = {
                                   "it up; other work goes in another session)",
     ("expect", "save_to"): "'save_to' (that is `run`'s and `wait`'s: `wait` save_to= after this call copies the "
                            "command's output, or `read` shows it from the log)",
+    ("wait", "input"): "'input' (that is `run`'s: `wait` sends nothing, it waits for what runs; to run a command "
+                       "while this one goes on, `run` in another session)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",
