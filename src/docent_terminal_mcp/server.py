@@ -734,7 +734,7 @@ class Manager:
 
 
     async def split(self, parent: str, name: str | None, command: str | None, below: bool, size: str | None,
-                    env: dict[str, str] | None, prompt_pattern: str | None) -> Session:
+                    env: dict[str, str] | None, prompt_pattern: str | None, cwd: str | None = None) -> Session:
         """A new pane in `parent`'s window, as a session of its own."""
         await self.get(parent)
         window = self.tmux.window(parent)
@@ -756,7 +756,8 @@ class Manager:
             spid = await self.tmux.server_pid()
             meta = {
                 "name": name, "command": shell[0] if shell else command, "argv": argv,
-                "cwd": await self.tmux.pane_path(parent_pane) or os.getcwd(), "cols": None, "rows": None,
+                "cwd": os.path.expanduser(cwd) if cwd else await self.tmux.pane_path(parent_pane) or os.getcwd(),
+                "cols": None, "rows": None,
                 "shell_integration": integrated, "prompt_pattern": prompt_pattern,
                 "created": time.time(), "started_by": ACTOR.get(), "nonce": secrets.token_hex(6),
                 "pane_id": None, "window": window, "parent": window, "tmux_pid": spid,
@@ -2583,6 +2584,21 @@ def rejoin(line: str, a: int, b: int, command: str) -> str:
 # clipping does only from the middle -- "paternalistic", an Adjutant GLM.)
 MID_PIPE = re.compile(r"\s*\|\s*(?P<what>tail)(?:\s+(?:-n\s*|-)\d+)?\s*$")
 
+def gdb_stops_itself(command: str) -> bool:
+    """Will this gdb end by itself, never to wait at a prompt?  -batch, a
+    quit in the line, `timeout N` around it, or a -x script with a quit in it
+    (a script without one left an eval's gdb at its prompt, in the file)."""
+    if "batch" in command or "quit" in command or re.search(r"\btimeout\s+\d", command):
+        return True
+    for m in re.finditer(r"(?:^|\s)(?:-x|--command[= ]|-command[= ])\s*(\S+)", command):
+        try:
+            if re.search(r"^\s*q(?:uit)?\b", Path(m[1]).expanduser().read_text(errors="replace"), re.M):
+                return True
+        except OSError:
+            pass  # (relative to a directory we cannot tell here, or not there yet)
+    return False
+
+
 GDB_WORD = re.compile(r"(?:^|[\s/])gdb(?:\s|$)")
 STDOUT_TO_FILE = re.compile(r"\s*(?<![<>&\d])1?>\s*(?P<file>[^\s;|&<>]+)")
 STDERR_TO_OUT = re.compile(r"\s*2>&1")
@@ -2610,9 +2626,12 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> N
     eval's Qwen got six redirect refusals in one trial, each "this happens
     once".)"""
     key = f"{s.dir.parent}:{ACTOR.get()}:{habit}"
-    if not SECOND_GUESS_ON or key in GUESS_ASKED:
+    # (The line itself too: "sending the same line again runs it", and a line
+    # with two habits drew a second refusal when sent again.)
+    line_key = f"{s.dir.parent}:{ACTOR.get()}:line:{line}"
+    if not SECOND_GUESS_ON or key in GUESS_ASKED or line_key in GUESS_ASKED:
         return
-    GUESS_ASKED.add(key)
+    GUESS_ASKED.update((key, line_key))
     if habit in GUESS_NOTES:
         HABITS_NOTED.add(f"{s.dir.parent}:{ACTOR.get()}:{GUESS_NOTES[habit]}")
     raise ToolError(
@@ -2723,11 +2742,14 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
         # open, whose lines are no commands.
         if "<<" in line or line.count("'") % 2 or line.count('"') % 2:
             return
+        if f"{s.dir.parent}:{ACTOR.get()}:line:{line}" in GUESS_ASKED:
+            return  # sent again
         for part in line.split("\n"):
             if part.strip():
                 try:
                     await second_guesses(s, part, last_lines, save_to, tool)
                 except ToolError as e:
+                    GUESS_ASKED.add(f"{s.dir.parent}:{ACTOR.get()}:line:{line}")
                     raise ToolError(f"{e}  (That is one line of your input; none of its lines were sent.)") from None
         return
     if (hop := hop_without_integration(line)) and (cmd := await own_command(s)):
@@ -2809,7 +2831,7 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
     # bilby's `gdb ... 2>&1 > trace.log`, seven calls to get out.
     for a, b in line_segments(line):
         part = line[a:b]
-        if GDB_WORD.search(part) and "batch" not in part and "quit" not in part \
+        if GDB_WORD.search(part) and not gdb_stops_itself(part) \
                 and (m := STDOUT_TO_FILE.search(part)) and m["file"] != "/dev/null" and await s.where() is None:
             plain = STDERR_TO_OUT.sub("", part[:m.start()] + part[m.end():])
             second_guess(
@@ -3432,6 +3454,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         env: Annotated[dict[str, str] | None, Field(description="environment variables set in the new pane")] = None,
         prompt_pattern: Annotated[str | None, Field(description="the new session's default prompt regex, as for "
                                                                 "session_create; rarely needed")] = None,
+        cwd: Annotated[str | None, Field(description="working directory (default: that of the pane split)")] = None,
     ) -> str:
         """Split a session's window: a new pane beside it, shown together to a
         human attached to that window, and a session of its own -- logged
@@ -3441,7 +3464,7 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
         once: a testsuite running in one pane, gdb in the other.  Both panes
         are addressed by session name; typing never follows the active
         pane."""
-        s = await mgr.split(session, name, command, below, size, env, prompt_pattern)
+        s = await mgr.split(session, name, command, below, size, env, prompt_pattern, cwd)
         async with s.lock:
             if s.integrated:
                 await s.wait(lambda: s.shell_state == "input", 10)

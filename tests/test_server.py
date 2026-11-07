@@ -4846,12 +4846,35 @@ async def test_an_interactive_gdb_with_its_stdout_in_a_file_is_second_guessed(te
     assert 'input="cd /tmp && gdb -nx -q ./a.out; echo DONE=$?" save_to="trace.log"' in str(e.value), e.value
     from docent_terminal_mcp import server
     server.GUESS_ASKED.clear()
-    # -batch, a make, or gdb told to quit: left alone by this one.
-    for line in ("true gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "true gdb -ex quit > /tmp/o.$$"):
+    # -batch, a make, gdb told to quit, `timeout`, a -x script that quits: left
+    # alone by this one (an eval's loop of `timeout 30 gdb -x cmds > r$i.out`).
+    script = term.home / "cmds.gdb"
+    script.write_text("run\nquit\n")
+    for line in ("true gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "true gdb -ex quit > /tmp/o.$$",
+                 "true timeout 30 gdb -nx > /tmp/o.$$", f"true gdb -nx -x {script} > /tmp/o.$$"):
         out = await term("run", session="s", input=line)
         assert "prompt and questions" not in out, out
         server.GUESS_ASKED.clear()
     await term("run", session="s", input="rm -f /tmp/o.$$")
+
+
+@pytest.mark.second_guess
+async def test_a_line_with_two_habits_is_refused_once(term):
+    # "sending the same line again runs it": an eval's line with two habits
+    # drew a second, different refusal when sent again.
+    line = "seq 3 > /tmp/h.$$ 2>&1; seq 5 | tail -1; rm -f /tmp/h.$$; echo END"
+    with pytest.raises(AssertionError, match="Refused, not run"):
+        await term("run", session="s", input=line)
+    out = await term("run", session="s", input=line)
+    assert "Refused" not in out and "\n5\nEND" in out, out
+
+
+async def test_session_split_takes_a_working_directory(term, tmp_path):
+    # Refused in 2 of 3 trials of an eval's round: session_create has it.
+    await term("session_split", session="s", name="beside", cwd=str(tmp_path))
+    out = await term("run", session="beside", input="pwd")
+    assert str(tmp_path) in out, out
+    await term("session_close", session="beside")
 
 
 @needs("gdb")
