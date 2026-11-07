@@ -2618,7 +2618,7 @@ POLL_READERS = {"cat", "tail", "head", "grep", "egrep", "rg", "ls", "wc", "ps", 
                 "curl", "ss", "netstat", "test", "[", "less", "tac", "file", "find", "nvidia-smi", "squeue"}
 
 
-def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> None:
+def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once: bool = True) -> None:
     """Refuse `line` with why and what instead, the first time this agent
     shows `habit` on this server; after that, the habit's lines run -- the
     refused one sent again, and any other.  (Until 5c3dd1b only the same
@@ -2629,7 +2629,7 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> N
     # (The line itself too: "sending the same line again runs it", and a line
     # with two habits drew a second refusal when sent again.)
     line_key = f"{s.dir.parent}:{ACTOR.get()}:line:{line}"
-    if not SECOND_GUESS_ON or key in GUESS_ASKED or line_key in GUESS_ASKED:
+    if not SECOND_GUESS_ON or (once and key in GUESS_ASKED) or line_key in GUESS_ASKED:
         return
     GUESS_ASKED.update((key, line_key))
     if habit in GUESS_NOTES:
@@ -2637,7 +2637,8 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str) -> N
     raise ToolError(
         # (Was "not typed -- a second guess, made once: ...", the way out last:
         # Kevin found it open to reading, and in the evals no model resent a line.)
-        f"Refused, not run (this happens once; sending the same line again runs it): {why}  {instead}")
+        f"Refused, not run ({'this happens once; ' if once else ''}sending the same line again runs it): {why}  "
+        f"{instead}")
 
 
 # A shell command, by what gdb's input does not look like (not `p a && b` or
@@ -2666,7 +2667,10 @@ def second_guess_shell_line(s: Session, line: str) -> None:
                 f"this looks like a shell command, but the session is at {(at[-30:] or 'gdb')!r}: gdb would read it, and the "
                 "shell never sees it (gdb has a `cd` and a `make` of its own).",
                 "For the shell: another session (session_create, or session_split beside this one), or leave gdb "
-                "first, then send it.")
+                "first, then send it.",
+                # A mistake, not a habit: each such line (an eval's second one,
+                # after its one refusal, went to gdb).
+                once=False)
             return
 
 

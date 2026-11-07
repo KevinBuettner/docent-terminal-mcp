@@ -4892,8 +4892,9 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     # gdb's own input is left alone, and the refusal comes once.
     out = await term("run", session="s", input="p 1 && 1")
     assert "$1 = 1" in out, out
-    out = await term("run", session="s", input="for i in 1 2; do echo x; done")
-    assert "Refused" not in out, out
+    # Not once per agent: a mistake each time (an eval's second such line went to gdb).
+    with pytest.raises(AssertionError, match=r"Refused, not run \(sending the same line again runs it\)"):
+        await term("run", session="s", input="for i in 1 2; do echo x; done")
     from docent_terminal_mcp import server as srv
     srv.GUESS_ASKED.clear()
     out = await term("run", session="s", input="shell echo N=$(echo 7)")  # gdb's own shell command
