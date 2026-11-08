@@ -2646,6 +2646,7 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once
 # 121 such lines in 71 eval trials, 1 trial in 5 lately.
 SHELL_LINE = re.compile(r"^\s*(?:for\s+\w+\s+in\b.*;\s*do\b|cd\s+\S+\s*(?:&&|\|\||;|2>)|(?:/|\./|~/)\S+\s+-\S|nohup\s"
                         r"|(?:make|ls|grep|git)\b.*(?:&&|;|\||2>))|\$\(")
+YES_NO_AT = re.compile(r"(?:\[[yYnN]/[yYnN]\]|\((?:y/n|yes/no|y or n)\))\s*$")
 GDB_AT = re.compile(r"\((?:top-)?gdb\)\s*$|\(y or n\)\s*(?:\[answered[^\]]*\])?\s*$")
 
 
@@ -2654,18 +2655,24 @@ def second_guess_shell_line(s: Session, line: str) -> None:
     question: an eval's `cd build && make -j8 check`, taken by gdb's own
     `cd`, then by "Quit anyway? (y or n)", cost five calls."""
     at = s.term.cursor_text().strip()
+    # A yes/no question, of any program: the line would be its answer (an
+    # eval's line went into dnf's "Install package ...? [N/y]").
+    asked = YES_NO_AT.search(at)
     # (Or gdb in front with its prompt not on the cursor's line just now:
     # an eval's `ls ... 2>/dev/null; ls ...` got "Undefined command".)
-    if not GDB_AT.search(at) and "gdb" not in (s.pane_command or ""):
+    if not asked and not GDB_AT.search(at) and "gdb" not in (s.pane_command or ""):
         return
+    reader = "it would be taken as the answer to that question" if asked else "gdb would read it"
     for part in line.split("\n"):
         # (gdb's own `shell CMD` and `!CMD` are meant for gdb: an eval's
         # `shell echo LOGSIZE=$(wc -l < infrun2.log)` was refused.)
         if SHELL_LINE.search(part) and not re.match(r"\s*(?:shell\b|!)", part):
             second_guess(
                 s, "shell_line_at_gdb", line,
-                f"this looks like a shell command, but the session is at {(at[-30:] or 'gdb')!r}: gdb would read it, and the "
-                "shell never sees it (gdb has a `cd` and a `make` of its own).",
+                f"this looks like a shell command, but the session is at {(at[-30:] or 'gdb')!r}: {reader}, and "
+                "the shell never sees it" + ("." if asked else " (gdb has a `cd` and a `make` of its own)."),
+                ("Answer the question first (`run` input=\"n\", or what it asks), then send it -- or use another "
+                 "session (session_create, or session_split beside this one).") if asked else
                 "For the shell: another session (session_create, or session_split beside this one), or leave gdb "
                 "first, then send it.",
                 # A mistake, not a habit: each such line (an eval's second one,

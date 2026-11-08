@@ -4862,6 +4862,18 @@ async def test_an_interactive_gdb_with_its_stdout_in_a_file_is_second_guessed(te
 
 
 @pytest.mark.second_guess
+async def test_a_shell_line_at_any_yes_no_question_is_second_guessed(term):
+    # dnf's command-not-found asked "Install package ...? [N/y]", and the
+    # model's next shell line went in as the answer.
+    await term("run", session="s", input="read -p 'Install package foo to provide command bar? [N/y] ' a", timeout_s=5)
+    with pytest.raises(AssertionError, match="it would be taken as the answer to that question") as e:
+        await term("run", session="s", input="cd /tmp && ls")
+    assert 'Answer the question first' in str(e.value), e.value
+    out = await term("run", session="s", input="n")
+    assert "Refused" not in out, out
+
+
+@pytest.mark.second_guess
 async def test_a_line_with_two_habits_is_refused_once(term):
     # "sending the same line again runs it": an eval's line with two habits
     # drew a second, different refusal when sent again.
