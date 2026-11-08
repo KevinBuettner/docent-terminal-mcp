@@ -3333,6 +3333,9 @@ def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
             return own
         if alias := next(((n, unit) for n, unit in OTHER_TOOLS_ARGUMENTS.get(k, ()) if n in known), None):
             return f"{k!r} (another shell tool's argument: here {alias[0]}{alias[1]})"
+        # (Before the prefix rule: `session_timeout` got "did you mean 'session'?".)
+        if "timeout" in k and "timeout_s" in known:
+            return f"{k!r} (did you mean 'timeout_s', in seconds?)"
         if k == "workdir" and "cwd" not in known:
             return f"{k!r} (a session keeps its directory: `cd` there, or session_create cwd=)"
         near = ([n for n in known if abbreviates(k, n) or k.startswith(n)]

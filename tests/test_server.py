@@ -4259,6 +4259,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("expect", session="s", input="ls", respond=[], save_to="f.log")
     assert "'save_to' (that is `run`'s and `wait`'s" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="ls", session_timeout=30)
+    assert "'session_timeout' (did you mean 'timeout_s', in seconds?)" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("wait", session="s", input="tail -3 build.log")
     assert "'input' (that is `run`'s: `wait` sends nothing" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
