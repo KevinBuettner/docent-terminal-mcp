@@ -2600,6 +2600,20 @@ def gdb_stops_itself(command: str) -> bool:
 
 
 GDB_WORD = re.compile(r"(?:^|[\s/])gdb(?:\s|$)")
+COMMAND_WRAPPERS = {"timeout", "nohup", "env", "stdbuf", "time", "exec", "command", "nice"}
+
+
+def runs_gdb(command: str) -> bool:
+    """Is gdb the program a stage of this command runs -- not an argument
+    (`make -j8 gdb`, the make target, drew the gdb redirect refusal)?"""
+    for stage in re.split(r"\|(?!\|)", command):
+        words = stage.split()
+        while words and (words[0] in COMMAND_WRAPPERS or "=" in words[0] or words[0].startswith("-")
+                         or re.fullmatch(r"\d+[smhd]?", words[0])):
+            words.pop(0)
+        if words and re.fullmatch(r"(?:.*/)?(?:[\w.-]+-)?gdb", words[0]):
+            return True
+    return False
 STDOUT_TO_FILE = re.compile(r"\s*(?<![<>&\d])1?>\s*(?P<file>[^\s;|&<>]+)")
 STDERR_TO_OUT = re.compile(r"\s*2>&1")
 
@@ -2844,7 +2858,7 @@ async def second_guesses(s: Session, line: str, last_lines: int | None, save_to:
     # bilby's `gdb ... 2>&1 > trace.log`, seven calls to get out.
     for a, b in line_segments(line):
         part = line[a:b]
-        if GDB_WORD.search(part) and not gdb_stops_itself(part) \
+        if runs_gdb(part) and not gdb_stops_itself(part) \
                 and (m := STDOUT_TO_FILE.search(part)) and m["file"] != "/dev/null" and await s.where() is None:
             plain = STDERR_TO_OUT.sub("", part[:m.start()] + part[m.end():])
             second_guess(
@@ -3358,6 +3372,12 @@ class Server(MCPServer):
             known = list(tool.parameters.get("properties", {}))
             if unknown := [k for k in arguments if k not in known]:
                 raise ToolError(unknown_arguments(name, unknown, known))
+            # (Not pydantic's "1 validation error for runArguments session
+            # Field required": an eval's run sent with no session.)
+            if missing := [k for k in tool.parameters.get("required", []) if k not in arguments]:
+                what = " and ".join(f"{k}=" for k in missing)
+                hint = " (session_list names the sessions)" if "session" in missing else ""
+                raise ToolError(f"{name} needs {what}{hint}; nothing was done")
         # A session's name with blanks around it is that name: qwen sent session="\nvim-ini".
         arguments = {k: v.strip() if k in ("session", "name") and isinstance(v, str) else v
                      for k, v in arguments.items()}

@@ -4261,6 +4261,10 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
     with pytest.raises(AssertionError) as e:
         await term("run", session="s", input="ls", session_timeout=30)
     assert "'session_timeout' (did you mean 'timeout_s', in seconds?)" in str(e.value), e.value
+    # A required argument left out: said plainly, not as pydantic's dump.
+    with pytest.raises(AssertionError) as e:
+        await term("run", input="ls")
+    assert "run needs session= (session_list names the sessions); nothing was done" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
         await term("wait", session="s", input="tail -3 build.log")
     assert "'input' (that is `run`'s: `wait` sends nothing" in str(e.value), e.value
@@ -4856,8 +4860,11 @@ async def test_an_interactive_gdb_with_its_stdout_in_a_file_is_second_guessed(te
     # alone by this one (an eval's loop of `timeout 30 gdb -x cmds > r$i.out`).
     script = term.home / "cmds.gdb"
     script.write_text("run\nquit\n")
-    for line in ("true gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "true gdb -ex quit > /tmp/o.$$",
-                 "true timeout 30 gdb -nx > /tmp/o.$$", f"true gdb -nx -x {script} > /tmp/o.$$"):
+    # (Real commands, each over at once -- gdb or not installed: the check is
+    # made before anything runs.)
+    for line in ("gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "gdb -nx -ex quit > /tmp/o.$$",
+                 "make -n -j2 gdb > /tmp/o.$$",  # the make target named gdb, not a gdb run
+                 "timeout 1 gdb -nx > /tmp/o.$$", f"gdb -nx -x {script} > /tmp/o.$$"):
         out = await term("run", session="s", input=line)
         assert "prompt and questions" not in out, out
         server.GUESS_ASKED.clear()
