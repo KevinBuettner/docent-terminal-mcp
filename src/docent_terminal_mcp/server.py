@@ -2632,7 +2632,8 @@ POLL_READERS = {"cat", "tail", "head", "grep", "egrep", "rg", "ls", "wc", "ps", 
                 "curl", "ss", "netstat", "test", "[", "less", "tac", "file", "find", "nvidia-smi", "squeue"}
 
 
-def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once: bool = True) -> None:
+def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once: bool = True,
+                 resend: bool = True) -> None:
     """Refuse `line` with why and what instead, the first time this agent
     shows `habit` on this server; after that, the habit's lines run -- the
     refused one sent again, and any other.  (Until 5c3dd1b only the same
@@ -2643,7 +2644,7 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once
     # (The line itself too: "sending the same line again runs it", and a line
     # with two habits drew a second refusal when sent again.)
     line_key = f"{s.dir.parent}:{ACTOR.get()}:line:{line}"
-    if not SECOND_GUESS_ON or (once and key in GUESS_ASKED) or line_key in GUESS_ASKED:
+    if not SECOND_GUESS_ON or (once and key in GUESS_ASKED) or (resend and line_key in GUESS_ASKED):
         return
     GUESS_ASKED.update((key, line_key))
     if habit in GUESS_NOTES:
@@ -2651,8 +2652,8 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once
     raise ToolError(
         # (Was "not typed -- a second guess, made once: ...", the way out last:
         # Kevin found it open to reading, and in the evals no model resent a line.)
-        f"Refused, not run ({'this happens once; ' if once else ''}sending the same line again runs it): {why}  "
-        f"{instead}")
+        f"Refused, not run ({'this happens once; ' if once else ''}"
+        f"{'sending the same line again runs it' if resend else 'force=true sends it anyway'}): {why}  {instead}")
 
 
 # A shell command, by what gdb's input does not look like (not `p a && b` or
@@ -2690,8 +2691,10 @@ def second_guess_shell_line(s: Session, line: str) -> None:
                 "For the shell: another session (session_create, or session_split beside this one), or leave gdb "
                 "first, then send it.",
                 # A mistake, not a habit: each such line (an eval's second one,
-                # after its one refusal, went to gdb).
-                once=False)
+                # after its one refusal, went to gdb) -- and sent again too
+                # while still at gdb: an eval's `quit` was never submitted, and
+                # the resend went in.  force=true is the way past.
+                once=False, resend=False)
             return
 
 
@@ -3354,6 +3357,8 @@ def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
         # (Before the prefix rule: `session_timeout` got "did you mean 'session'?".)
         if "timeout" in k and "timeout_s" in known:
             return f"{k!r} (did you mean 'timeout_s', in seconds?)"
+        if "timeout" in k and "wait_ms" in known:  # send's (an eval's timeout_ms=)
+            return f"{k!r} (did you mean 'wait_ms', in milliseconds?)"
         if k == "workdir" and "cwd" not in known:
             return f"{k!r} (a session keeps its directory: `cd` there, or session_create cwd=)"
         near = ([n for n in known if abbreviates(k, n) or k.startswith(n)]

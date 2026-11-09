@@ -4277,6 +4277,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
     with pytest.raises(AssertionError) as e:
         await term("send", session="s", text="x", timeout_s="30")
     assert "'timeout_s' (that is `run`'s: here wait_ms=, in milliseconds" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
+        await term("send", session="s", text="x", timeout_ms=500)
+    assert "'timeout_ms' (did you mean 'wait_ms', in milliseconds?)" in str(e.value), e.value
     out = await term("session_list")
     assert "\ng\t" not in "\n" + out, out
 
@@ -4920,9 +4923,11 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     # gdb's own input is left alone, and the refusal comes once.
     out = await term("run", session="s", input="p 1 && 1")
     assert "$1 = 1" in out, out
-    # Not once per agent: a mistake each time (an eval's second such line went to gdb).
-    with pytest.raises(AssertionError, match=r"Refused, not run \(sending the same line again runs it\)"):
-        await term("run", session="s", input="for i in 1 2; do echo x; done")
+    # Not once per agent: a mistake each time (an eval's second such line went
+    # to gdb); nor let through when sent again while gdb is still there.
+    for _ in range(2):
+        with pytest.raises(AssertionError, match=r"Refused, not run \(force=true sends it anyway\)"):
+            await term("run", session="s", input="for i in 1 2; do echo x; done")
     from docent_terminal_mcp import server as srv
     srv.GUESS_ASKED.clear()
     out = await term("run", session="s", input="shell echo N=$(echo 7)")  # gdb's own shell command
