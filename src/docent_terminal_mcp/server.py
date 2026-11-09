@@ -3330,6 +3330,10 @@ OWN_TOOLS_ARGUMENTS = {
                            "command's output, or `read` shows it from the log)",
     ("wait", "input"): "'input' (that is `run`'s: `wait` sends nothing, it waits for what runs; to run a command "
                        "while this one goes on, `run` in another session)",
+    ("run", "cwd"): "'cwd' (a session keeps its directory: `cd` there first, or start the line with `cd DIR &&`; "
+                    "session_create cwd= sets where a new session starts)",
+    ("session_create", "input"): "'input' (that is `run`'s: create the session, then `run` input= in it; or "
+                                 "command= to start a program as the session itself)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",
