@@ -4937,6 +4937,8 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     srv.GUESS_ASKED.clear()
     out = await term("run", session="s", input="shell echo N=$(echo 7)")  # gdb's own shell command
     assert "N=7" in out and "Refused" not in out, out
+    with pytest.raises(AssertionError, match="this looks like a shell command"):  # (timeout first: missed once)
+        await term("run", session="s", input="timeout 60 /usr/bin/gdb -nx -q ./x 2>&1 | tail -30; echo RC=$?")
     with pytest.raises(AssertionError, match="this looks like a shell command"):  # (mkdir first: missed once)
         await term("run", session="s", input="mkdir -p /tmp/c$$ && cd /tmp/c$$ && gcc -g x.c -o t1 && echo BUILT")
     # `cd dir` with what follows it other than && (gdb took one silently).

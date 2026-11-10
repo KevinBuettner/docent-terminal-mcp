@@ -2664,7 +2664,8 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once
 SHELL_LINE = re.compile(r"^\s*(?:for\s+\w+\s+in\b.*;\s*do\b|cd\s+\S+\s*(?:&&|\|\||;|2>)|(?:/|\./|~/)\S+\s+-\S|nohup\s"
                         r"|(?:make|ls|grep|git|mkdir|gcc|cc|g\+\+|clang|cat|rm|cp|mv|sed|awk|find|tar|cmake|ninja"
                         r"|python3?|export|source|chmod|touch|ln|diff|patch|objdump|readelf|nm|which|ps|pgrep|pkill"
-                        r"|sleep|tee|head|tail|wc|env)\b.*(?:&&|;|\||2>|>))|\$\(")
+                        r"|sleep|tee|head|tail|wc|env|timeout|stdbuf|nice|strace|valgrind|perf|xargs|bash|sh)\b"
+                        r".*(?:&&|;|\||2>|>))|\$\(")
 YES_NO_AT = re.compile(r"(?:\[[yYnN]/[yYnN]\]|\((?:y/n|yes/no|y or n)\))\s*$")
 GDB_AT = re.compile(r"\((?:top-)?gdb\)\s*$|\(y or n\)\s*(?:\[answered[^\]]*\])?\s*$")
 
