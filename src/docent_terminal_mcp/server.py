@@ -2656,11 +2656,15 @@ def second_guess(s: Session, habit: str, line: str, why: str, instead: str, once
         f"{'sending the same line again runs it' if resend else 'force=true sends it anyway'}): {why}  {instead}")
 
 
-# A shell command, by what gdb's input does not look like (not `p a && b` or
-# `break f if a && b`, which gdb means; its own `cd dir` and `make` are bare):
-# 121 such lines in 71 eval trials, 1 trial in 5 lately.
+# A shell command, by what gdb's input does not look like: not `p a && b` or
+# `break f if a && b`, which gdb means, nor its own bare `cd dir` and `make`;
+# a common shell command's name, then shell syntax (an eval's `mkdir -p d &&
+# cd d && gcc ...` went by when only a few names were listed).  121 such
+# lines in 71 eval trials, 1 trial in 5 lately.
 SHELL_LINE = re.compile(r"^\s*(?:for\s+\w+\s+in\b.*;\s*do\b|cd\s+\S+\s*(?:&&|\|\||;|2>)|(?:/|\./|~/)\S+\s+-\S|nohup\s"
-                        r"|(?:make|ls|grep|git)\b.*(?:&&|;|\||2>))|\$\(")
+                        r"|(?:make|ls|grep|git|mkdir|gcc|cc|g\+\+|clang|cat|rm|cp|mv|sed|awk|find|tar|cmake|ninja"
+                        r"|python3?|export|source|chmod|touch|ln|diff|patch|objdump|readelf|nm|which|ps|pgrep|pkill"
+                        r"|sleep|tee|head|tail|wc|env)\b.*(?:&&|;|\||2>|>))|\$\(")
 YES_NO_AT = re.compile(r"(?:\[[yYnN]/[yYnN]\]|\((?:y/n|yes/no|y or n)\))\s*$")
 GDB_AT = re.compile(r"\((?:top-)?gdb\)\s*$|\(y or n\)\s*(?:\[answered[^\]]*\])?\s*$")
 
