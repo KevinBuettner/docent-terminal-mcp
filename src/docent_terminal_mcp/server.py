@@ -2915,7 +2915,19 @@ def typed_not_submitted(s: Session, text: str, keys: list[str], finished: list) 
     and the next `run` typed its line after the "quit".  (Tab completion, a
     one-key answer, an editor's keys: no note.)"""
     word = text.strip()
-    if (len(word) < 2 or "\r" in text or "\t" in text or keys or finished or s.term.full_screen
+    if not text and keys and all(len(k) == 1 and k.isprintable() for k in keys):
+        # Keys, one character each, left after a prompt: `send` keys=["q"] at
+        # (gdb), taken for gdb's quit key (an eval's next line, a shell one,
+        # found gdb still there).  Not at a pager's, whose keys act alone.
+        word = "".join(keys)
+        before = s.term.cursor_text().rstrip()
+        if finished or s.term.full_screen or s.at_shell_prompt or not before.endswith(word) \
+                or not DEFAULT_PROMPT.search(before[:len(before) - len(word)]):
+            return None
+        keys = []
+    elif len(word) < 2:
+        return None
+    if ("\r" in text or "\t" in text or keys or finished or s.term.full_screen
             or s.at_shell_prompt or not s.term.cursor_text().rstrip().endswith(word)):
         return None
     return (f"[{word[-40:]!r} is on the input line, not submitted: `send` presses no Enter -- keys=[\"enter\"] "

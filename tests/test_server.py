@@ -4830,10 +4830,15 @@ async def test_send_says_when_its_text_was_not_submitted(term):
     # An eval's gdb got send text="quit": "no new output", and the "quit"
     # stayed on the line under the next run's command.
     await term("run", session="s", input="python3 -q", timeout_s=10)
+    # A key, typed after the prompt: `send` keys=["q"] at (gdb), taken for quit.
+    out = await term("send", session="s", keys=["q"])
+    assert "'q' is on the input line, not submitted" in out, out
+    await term("send", session="s", keys=["backspace"])
     out = await term("send", session="s", text="quit")
     assert "'quit' is on the input line, not submitted" in out and 'keys=["enter"]' in out, out
     out = await term("send", session="s", text="()", keys=["enter"])  # submitted: no note
     assert "not submitted" not in out, out
+
 
 
 @pytest.mark.second_guess
