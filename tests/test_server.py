@@ -4908,6 +4908,16 @@ async def test_a_line_with_two_habits_is_refused_once(term):
     assert "Refused" not in out and "\n5\nEND" in out, out
 
 
+async def test_a_background_jobs_output_on_the_input_line_is_not_a_human(term):
+    # An eval's gdb started with `&` printed "(gdb)" at the shell prompt, and
+    # the next run was refused: "a human is probably mid-command".  No
+    # terminal was attached, and no one had typed it.
+    await term("run", session="s", input="sh -c 'sleep 0.5; printf \"(gdb) \"' &")
+    await asyncio.sleep(1.5)
+    out = await term("run", session="s", input="echo hi")
+    assert "'(gdb)' on the input line was a background job's output" in out and "\nhi\n" in out + "\n", out
+
+
 async def test_session_split_takes_a_working_directory(term, tmp_path):
     # Refused in 2 of 3 trials of an eval's round: session_create has it.
     await term("session_split", session="s", name="beside", cwd=str(tmp_path))
@@ -4941,6 +4951,9 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
         await term("run", session="s", input="timeout 60 /usr/bin/gdb -nx -q ./x 2>&1 | tail -30; echo RC=$?")
     with pytest.raises(AssertionError, match="this looks like a shell command"):  # (mkdir first: missed once)
         await term("run", session="s", input="mkdir -p /tmp/c$$ && cd /tmp/c$$ && gcc -g x.c -o t1 && echo BUILT")
+    # expect's input too (an eval's gdb command lines went by it to gdb).
+    with pytest.raises(AssertionError, match="this looks like a shell command"):
+        await term("expect", session="s", input="cd /tmp && make -j2 check", respond=[])
     # `cd dir` with what follows it other than && (gdb took one silently).
     from docent_terminal_mcp import server
     server.GUESS_ASKED.clear()

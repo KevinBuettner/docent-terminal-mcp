@@ -842,10 +842,16 @@ async def check_human(s: Session, force: bool, tool: str = "run") -> None:
     if force:
         return
     foreign = s.foreign_input()
-    if foreign and s.typed_by(foreign) == "human" and not s.at_shell_prompt \
+    s.output_on_line = ""
+    if foreign and s.typed_by(foreign) == "human" and (not s.at_shell_prompt or DEFAULT_PROMPT.search(foreign)) \
             and await s.tmux.client_count(s.name) == 0:
         # No human is attached to have typed it, and no agent did: at a
-        # program's prompt it is the program's output (">>> step 1").
+        # program's prompt it is the program's output (">>> step 1"); at the
+        # shell's, a program's prompt is a background job's output, printed
+        # there -- an eval's gdb started with `&` put "(gdb)" there, and a run
+        # was refused as if a human were mid-command.
+        if s.at_shell_prompt:
+            s.output_on_line = foreign
         foreign = ""
     if foreign:
         who = s.typed_by(foreign)
@@ -1157,6 +1163,13 @@ async def clear_prompt(s: Session) -> str:
     discarded: it leaves no other trace."""
     whose = "" if s.foreign_input() else "your own "
     discarded = s.pending_input()
+    if getattr(s, "output_on_line", "") and s.output_on_line == discarded:
+        await s.tmux.send_keys(s.name, ["C-e", "C-u"])
+        await s.wait(lambda: not s.pending_input(), 3)
+        s.note_model_input()
+        s.output_on_line = ""
+        return (f"[{discarded!r} on the input line was a background job's output, printed at the prompt -- "
+                "no one typed it (no terminal is attached), and it is not part of this command]")
     if s.continuation:
         await s.tmux.send_keys(s.name, ["C-c"])  # abandon the incomplete command
         # The last line may be only the continuation prompt: nothing typed.
@@ -4081,6 +4094,10 @@ def build_server(home: Path | None = None, socket: str | None = None, shared: bo
                     forced = await clear_prompt(s) + "\n"
                 if s.at_shell_prompt or (s.shell_in_front() and s.at_plain_shell_prompt()):
                     await second_guesses(s, input, None, None, tool="expect")
+                elif not force:
+                    # (expect's input went by it: an eval's two gdb command
+                    # lines, sent with expect, went to gdb at its prompt.)
+                    second_guess_shell_line(s, input)
             if not s.at_shell_prompt:
                 report_foreign_input(s)
             were_open = open_command_ids(s) | s.open_at_reply
