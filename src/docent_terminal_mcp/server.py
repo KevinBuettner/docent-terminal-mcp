@@ -3367,6 +3367,8 @@ OWN_TOOLS_ARGUMENTS = {
                     "session_create cwd= sets where a new session starts)",
     ("session_create", "input"): "'input' (that is `run`'s: create the session, then `run` input= in it; or "
                                  "command= to start a program as the session itself)",
+    ("run", "command"): "'command' (that is session_create's, to start a program as the session itself: here "
+                        "input= is the line, typed at the session's prompt)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",

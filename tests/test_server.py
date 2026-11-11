@@ -4262,6 +4262,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("run", session="s", input="ls", session_timeout=30)
     assert "'session_timeout' (did you mean 'timeout_s', in seconds?)" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
+        await term("run", session="s", command="ls")
+    assert "'command' (that is session_create's" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("run", session="s", input="ls", cwd="/tmp")
     assert "'cwd' (a session keeps its directory: `cd` there first" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
