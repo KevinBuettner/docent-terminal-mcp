@@ -4879,15 +4879,16 @@ async def test_an_interactive_gdb_with_its_stdout_in_a_file_is_second_guessed(te
     # -batch, a make, gdb told to quit, `timeout`, a -x script that quits: left
     # alone by this one (an eval's loop of `timeout 30 gdb -x cmds > r$i.out`).
     script = term.home / "cmds.gdb"
-    script.write_text("run\nquit\n")
+    script.write_text("info files\nquit\n")  # (not `run` first: with no program, it fails and the script stops there)
     # (Real commands, each over at once -- gdb or not installed: the check is
     # made before anything runs.)
     for line in ("gdb -batch -nx > /tmp/o.$$", "make -v > /dev/null", "gdb -nx -ex quit > /tmp/o.$$",
                  "make -n -j2 gdb > /tmp/o.$$",  # the make target named gdb, not a gdb run
-                 "timeout 1 gdb -nx > /tmp/o.$$", f"gdb -nx -x {script} > /tmp/o.$$"):
+                 f"gdb -nx -x {script} > /tmp/o.$$", "timeout 1 gdb -nx > /tmp/o.$$"):
         out = await term("run", session="s", input=line)
         assert "prompt and questions" not in out, out
         server.GUESS_ASKED.clear()
+    await asyncio.sleep(2)  # (timeout's gdb is in front until it ends: rm would go to it)
     await term("run", session="s", input="rm -f /tmp/o.$$")
 
 
