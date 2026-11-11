@@ -4262,6 +4262,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("run", session="s", input="ls", session_timeout=30)
     assert "'session_timeout' (did you mean 'timeout_s', in seconds?)" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="ls", description="List files")
+    assert "'description' (the Bash tool's label for a command: not needed here" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("run", session="s", input="ls", cols=200)
     assert "'cols' (that is session_create's and session_resize's" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:

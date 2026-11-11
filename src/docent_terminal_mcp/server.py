@@ -3395,6 +3395,11 @@ def unknown_arguments(tool: str, unknown: list[str], known: list[str]) -> str:
         if alias := next(((n, unit) for n, unit in OTHER_TOOLS_ARGUMENTS.get(k, ()) if n in known), None):
             return f"{k!r} (another shell tool's argument: here {alias[0]}{alias[1]})"
         # (Before the prefix rule: `session_timeout` got "did you mean 'session'?".)
+        if k == "description" and "description" not in known:
+            # (Claude Code's Bash tool labels its commands: an eval's run with
+            # description= went to Bash after a plain refusal, twice.)
+            return (f"{k!r} (the Bash tool's label for a command: not needed here, the reply names the command -- "
+                    "send the same call without it)")
         if "timeout" in k and "timeout_s" in known:
             return f"{k!r} (did you mean 'timeout_s', in seconds?)"
         if "timeout" in k and "wait_ms" in known:  # send's (an eval's timeout_ms=)
