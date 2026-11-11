@@ -4262,6 +4262,9 @@ async def test_an_argument_the_tool_does_not_have_is_refused(term):
         await term("run", session="s", input="ls", session_timeout=30)
     assert "'session_timeout' (did you mean 'timeout_s', in seconds?)" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
+        await term("run", session="s", input="ls", cols=200)
+    assert "'cols' (that is session_create's and session_resize's" in str(e.value), e.value
+    with pytest.raises(AssertionError) as e:
         await term("run", session="s", command="ls")
     assert "'command' (that is session_create's" in str(e.value), e.value
     with pytest.raises(AssertionError) as e:
@@ -4950,6 +4953,8 @@ async def test_a_shell_line_going_to_gdb_is_second_guessed(term):
     srv.GUESS_ASKED.clear()
     out = await term("run", session="s", input="shell echo N=$(echo 7)")  # gdb's own shell command
     assert "N=7" in out and "Refused" not in out, out
+    with pytest.raises(AssertionError, match="this looks like a shell command"):  # bare, but no gdb command
+        await term("run", session="s", input="grep -n break-here x.c")
     with pytest.raises(AssertionError, match="this looks like a shell command"):  # (timeout first: missed once)
         await term("run", session="s", input="timeout 60 /usr/bin/gdb -nx -q ./x 2>&1 | tail -30; echo RC=$?")
     with pytest.raises(AssertionError, match="this looks like a shell command"):  # (mkdir first: missed once)

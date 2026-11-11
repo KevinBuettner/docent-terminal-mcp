@@ -2678,7 +2678,13 @@ SHELL_LINE = re.compile(r"^\s*(?:for\s+\w+\s+in\b.*;\s*do\b|cd\s+\S+\s*(?:&&|\|\
                         r"|(?:make|ls|grep|git|mkdir|gcc|cc|g\+\+|clang|cat|rm|cp|mv|sed|awk|find|tar|cmake|ninja"
                         r"|python3?|export|source|chmod|touch|ln|diff|patch|objdump|readelf|nm|which|ps|pgrep|pkill"
                         r"|sleep|tee|head|tail|wc|env|timeout|stdbuf|nice|strace|valgrind|perf|xargs|bash|sh)\b"
-                        r".*(?:&&|;|\||2>|>))|\$\(")
+                        r".*(?:&&|;|\||2>|>))|\$\("
+                        # Names no gdb command has (nor abbreviates: not find, tar for
+                        # target, sh for shell, source, make, cd, kill, file): a shell
+                        # command even bare -- an eval's `grep -n break-here x.c`.
+                        r"|^\s*(?:grep|mkdir|gcc|cc|g\+\+|clang|cat|rm|cp|mv|sed|awk|cmake|ninja|python3|export|chmod"
+                        r"|touch|ln|diff|patch|objdump|readelf|nm|which|ps|pgrep|pkill|sleep|tee|head|tail|wc|timeout"
+                        r"|strace|valgrind|perf|xargs|bash|git|ls)(?:\s|$)")
 YES_NO_AT = re.compile(r"(?:\[[yYnN]/[yYnN]\]|\((?:y/n|yes/no|y or n)\))\s*$")
 GDB_AT = re.compile(r"\((?:top-)?gdb\)\s*$|\(y or n\)\s*(?:\[answered[^\]]*\])?\s*$")
 
@@ -3369,6 +3375,8 @@ OWN_TOOLS_ARGUMENTS = {
                                  "command= to start a program as the session itself)",
     ("run", "command"): "'command' (that is session_create's, to start a program as the session itself: here "
                         "input= is the line, typed at the session's prompt)",
+    ("run", "cols"): "'cols' (that is session_create's and session_resize's: the session's size)",
+    ("run", "rows"): "'rows' (that is session_create's and session_resize's: the session's size)",
     ("run", "text"): "'text' (that is `send`'s: here input=, the line, Enter added)",
     ("run", "keys"): "'keys' (that is `send`'s: keystrokes such as ctrl+c go through `send`; "
                      "interrupt=true here stops a running command before the line)",
